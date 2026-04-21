@@ -186,12 +186,12 @@ function formatPrCurrency(amount: number) {
 const PR_BUDGET_BY_PROJECT: Record<string, { total: number; used: number }> = {
   "proj-a": { total: 2_500_000, used: 720_000 },
   "proj-b": { total: 1_800_000, used: 1_650_000 },
-  "proj-c": { total: 900_000, used: 200_000 },
+  "proj-c": { total: 400_000, used: 200_000 },
 };
 
 const PR_BUDGET_BY_DEPARTMENT: Record<string, { total: number; used: number }> = {
   ops: { total: 1_800_000, used: 1_210_000 },
-  log: { total: 600_000, used: 552_000 },
+  log: { total: 700_000, used: 552_000 },
   mro: { total: 320_000, used: 146_000 },
   it: { total: 450_000, used: 90_000 },
   hr: { total: 120_000, used: 45_000 },
