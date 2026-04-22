@@ -26,7 +26,7 @@ import {
   FileText,
   HandCoins,
   LayoutGrid,
-  MoreHorizontal,
+  MoreVertical,
   Package,
   PieChart,
   Search,
@@ -139,7 +139,8 @@ function createEmptyItemRow(): ItemMasterRow {
 }
 
 type PrRequisitionKind = "project" | "operational";
-type BomInputMethod = "upload" | "manual";
+type PrType = "Product" | "Service" | "Training";
+type SourceDocumentType = "BOM" | "BOQ";
 type CreatedPrRecord = {
   id: string;
   ref: string;
@@ -156,6 +157,7 @@ type CreatedPrRecord = {
   lineItems: Array<{ name: string; quantity: string; unit: string; specification: string }>;
   baselineTotal: number;
   terms: string;
+  showSubmitApproval?: true;
 };
 
 type PrBomRow = {
@@ -165,6 +167,7 @@ type PrBomRow = {
   unitOfMeasure: string;
   requiredDate: string;
   estimatedCost: string;
+  specification: string;
 };
 
 function createEmptyBomRow(): PrBomRow {
@@ -175,8 +178,18 @@ function createEmptyBomRow(): PrBomRow {
     unitOfMeasure: "",
     requiredDate: "",
     estimatedCost: "",
+    specification: "",
   };
 }
+
+type PrTemplateLine = Omit<PrBomRow, "id">;
+type PrTemplate = {
+  id: string;
+  projectKey: "proj-a" | "proj-b" | "proj-c";
+  docType: SourceDocumentType;
+  name: string;
+  lines: PrTemplateLine[];
+};
 
 function formatPrCurrency(amount: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(amount);
@@ -198,13 +211,77 @@ const PR_BUDGET_BY_DEPARTMENT: Record<string, { total: number; used: number }> =
   finance: { total: 600_000, used: 210_000 },
 };
 
+const PR_DOCUMENT_TEMPLATES: PrTemplate[] = [
+  {
+    id: "tmpl-proj-a-bom-001",
+    projectKey: "proj-a",
+    docType: "BOM",
+    name: "Structural Steel BOM - Phase 1",
+    lines: [
+      { itemName: "Steel Rebar 16mm", quantity: "1200", unitOfMeasure: "kg", requiredDate: "", estimatedCost: "18500", specification: "ASTM A615 Grade 60" },
+      { itemName: "Portland Cement", quantity: "300", unitOfMeasure: "kg", requiredDate: "", estimatedCost: "4200", specification: "Type I OPC" },
+    ],
+  },
+  {
+    id: "tmpl-proj-a-boq-001",
+    projectKey: "proj-a",
+    docType: "BOQ",
+    name: "Foundation Works BOQ",
+    lines: [
+      { itemName: "Excavation Works", quantity: "1", unitOfMeasure: "svc", requiredDate: "", estimatedCost: "12500", specification: "To approved structural drawing" },
+      { itemName: "Concrete Pouring", quantity: "1", unitOfMeasure: "svc", requiredDate: "", estimatedCost: "22000", specification: "C30 mix with slump control" },
+    ],
+  },
+  {
+    id: "tmpl-proj-b-bom-001",
+    projectKey: "proj-b",
+    docType: "BOM",
+    name: "Road Base Materials BOM",
+    lines: [
+      { itemName: "Crushed Aggregate", quantity: "1800", unitOfMeasure: "kg", requiredDate: "", estimatedCost: "14000", specification: "20-40mm graded" },
+      { itemName: "Bitumen Emulsion", quantity: "900", unitOfMeasure: "l", requiredDate: "", estimatedCost: "16800", specification: "Rapid setting type" },
+    ],
+  },
+  {
+    id: "tmpl-proj-b-boq-001",
+    projectKey: "proj-b",
+    docType: "BOQ",
+    name: "Road Surface Works BOQ",
+    lines: [
+      { itemName: "Asphalt Laying", quantity: "1", unitOfMeasure: "svc", requiredDate: "", estimatedCost: "28000", specification: "7cm compacted thickness" },
+      { itemName: "Road Marking", quantity: "1", unitOfMeasure: "svc", requiredDate: "", estimatedCost: "6400", specification: "Thermoplastic reflective paint" },
+    ],
+  },
+  {
+    id: "tmpl-proj-c-bom-001",
+    projectKey: "proj-c",
+    docType: "BOM",
+    name: "Warehouse Racking BOM",
+    lines: [
+      { itemName: "Pallet Rack Frames", quantity: "60", unitOfMeasure: "pcs", requiredDate: "", estimatedCost: "19500", specification: "Heavy duty galvanized" },
+      { itemName: "Rack Beam Set", quantity: "140", unitOfMeasure: "pcs", requiredDate: "", estimatedCost: "11200", specification: "2.7m beam length" },
+    ],
+  },
+  {
+    id: "tmpl-proj-c-boq-001",
+    projectKey: "proj-c",
+    docType: "BOQ",
+    name: "Warehouse Installation BOQ",
+    lines: [
+      { itemName: "Racking Installation", quantity: "1", unitOfMeasure: "svc", requiredDate: "", estimatedCost: "9700", specification: "Includes alignment and anchoring" },
+      { itemName: "Forklift Access Lane Painting", quantity: "1", unitOfMeasure: "svc", requiredDate: "", estimatedCost: "3200", specification: "Safety yellow marking" },
+    ],
+  },
+];
+
 function PurchaseRequisitionForm({ onClose, onSubmit }: { onClose: () => void; onSubmit: (record: CreatedPrRecord) => void }) {
   const [kind, setKind] = useState<PrRequisitionKind>("project");
   const [linkedProject, setLinkedProject] = useState("");
   const [department, setDepartment] = useState("");
+  const [prType, setPrType] = useState<PrType>("Product");
   const [justification, setJustification] = useState("");
-  const [billType, setBillType] = useState<"Bill of Material" | "Bill of Quantity">("Bill of Material");
-  const [bomMethod, setBomMethod] = useState<BomInputMethod>("manual");
+  const [sourceDocType, setSourceDocType] = useState<SourceDocumentType>("BOM");
+  const [selectedTemplateId, setSelectedTemplateId] = useState("");
   const [bomRows, setBomRows] = useState<PrBomRow[]>(() => [createEmptyBomRow()]);
 
   const showProjectFields = kind === "project";
@@ -218,6 +295,11 @@ function PurchaseRequisitionForm({ onClose, onSubmit }: { onClose: () => void; o
     }
     return null;
   }, [kind, linkedProject, department]);
+
+  const filteredProjectTemplates = useMemo(() => {
+    if (!linkedProject) return [];
+    return PR_DOCUMENT_TEMPLATES.filter((template) => template.projectKey === linkedProject && template.docType === sourceDocType);
+  }, [linkedProject, sourceDocType]);
 
   const bomEstimatedTotal = useMemo(() => {
     return bomRows.reduce((sum, r) => {
@@ -250,12 +332,38 @@ function PurchaseRequisitionForm({ onClose, onSubmit }: { onClose: () => void; o
       setDepartment("");
     } else {
       setLinkedProject("");
+      setSelectedTemplateId("");
+      setBomRows([createEmptyBomRow()]);
     }
   }, []);
 
+  const applyTemplateToRows = useCallback(
+    (templateId: string) => {
+      setSelectedTemplateId(templateId);
+      const template = filteredProjectTemplates.find((row) => row.id === templateId);
+      if (!template) {
+        setBomRows([createEmptyBomRow()]);
+        return;
+      }
+      setBomRows(
+        template.lines.map((line) => ({
+          id: typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random()),
+          itemName: line.itemName,
+          quantity: line.quantity,
+          unitOfMeasure: line.unitOfMeasure,
+          requiredDate: line.requiredDate,
+          estimatedCost: line.estimatedCost,
+          specification: line.specification,
+        }))
+      );
+    },
+    [filteredProjectTemplates]
+  );
+
   const submitPr = useCallback(() => {
     const hasEntity = kind === "project" ? Boolean(linkedProject) : Boolean(department);
-    if (!hasEntity || !justification.trim() || bomRows.length < 1 || budgetExceeded) return;
+    const hasSourceTemplate = kind !== "project" || Boolean(selectedTemplateId);
+    if (!hasEntity || !hasSourceTemplate || !justification.trim() || bomRows.length < 1 || budgetExceeded) return;
     const createdAt = new Date().toISOString();
     const idx = Math.floor(Math.random() * 900 + 100);
     const ref = `PR-${idx}${String(Date.now()).slice(-2)}`;
@@ -263,15 +371,15 @@ function PurchaseRequisitionForm({ onClose, onSubmit }: { onClose: () => void; o
     const record: CreatedPrRecord = {
       id: typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random()),
       ref,
-      typeLabel: kind === "project" ? "Project PR" : "Support PR",
+      typeLabel: `${prType} PR`,
       entityLabel:
         kind === "project"
           ? (linkedProject === "proj-a" ? "Construction Project A" : linkedProject === "proj-b" ? "Road Expansion Project" : "Warehouse Setup")
           : (department === "ops" ? "Operations" : department === "it" ? "IT Department" : department === "hr" ? "HR Department" : "Department"),
       requester: "Alex Johnson",
-      owner: "Sarah Smith",
-      status: "Pending Sourcing Assignment",
-      sla: "48h",
+      owner: "Unassigned",
+      status: "Draft",
+      sla: "-",
       sourceKind: kind === "project" ? "project" : "department",
       projectKey: kind === "project" ? linkedProject : null,
       departmentKey: kind === "project" ? null : department,
@@ -280,14 +388,15 @@ function PurchaseRequisitionForm({ onClose, onSubmit }: { onClose: () => void; o
         name: r.itemName || "Item",
         quantity: r.quantity || "1",
         unit: r.unitOfMeasure || "pcs",
-        specification: billType,
+        specification: r.specification || sourceDocType,
       })),
       baselineTotal: baseline,
       terms: justification.trim(),
+      showSubmitApproval: true,
     };
     onSubmit(record);
     onClose();
-  }, [kind, linkedProject, department, justification, bomRows, budgetExceeded, billType, onSubmit, onClose]);
+  }, [kind, linkedProject, department, selectedTemplateId, justification, bomRows, budgetExceeded, prType, sourceDocType, onSubmit, onClose]);
 
   return (
     <>
@@ -306,11 +415,16 @@ function PurchaseRequisitionForm({ onClose, onSubmit }: { onClose: () => void; o
 
         {showProjectFields ? (
           <div className="flex flex-col gap-3">
-            <label className="text-xs font-medium">Project</label>
+            <label className="text-xs font-medium">Linked Project</label>
             <select
               className="h-9 w-full rounded-md border border-input bg-background px-3 text-xs"
               value={linkedProject}
-              onChange={(e) => setLinkedProject(e.target.value)}
+              onChange={(e) => {
+                const nextProject = e.target.value;
+                setLinkedProject(nextProject);
+                setSelectedTemplateId("");
+                setBomRows([createEmptyBomRow()]);
+              }}
             >
               <option value="">Select project</option>
               <option value="proj-a">Construction Project A</option>
@@ -370,6 +484,20 @@ function PurchaseRequisitionForm({ onClose, onSubmit }: { onClose: () => void; o
         )}
 
         <div className="flex flex-col gap-3">
+          <label className="text-xs font-medium">PR Type</label>
+          <select
+            className="h-9 w-full rounded-md border border-input bg-background px-3 text-xs"
+            value={prType}
+            onChange={(e) => setPrType(e.target.value as PrType)}
+            disabled={!linkedProject && showProjectFields}
+          >
+            <option value="Product">Product</option>
+            <option value="Service">Service</option>
+            <option value="Training">Training</option>
+          </select>
+        </div>
+
+        <div className="flex flex-col gap-3">
           <label className="text-xs font-medium">Justification</label>
           <textarea
             className="min-h-[88px] w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-xs outline-none ring-offset-background placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30"
@@ -383,141 +511,145 @@ function PurchaseRequisitionForm({ onClose, onSubmit }: { onClose: () => void; o
           />
         </div>
 
-        <div className="flex flex-col gap-3">
-          <label className="text-xs font-medium">Document Type</label>
-          <select
-            className="h-9 w-full rounded-md border border-input bg-background px-3 text-xs"
-            value={billType}
-            onChange={(e) => setBillType(e.target.value as "Bill of Material" | "Bill of Quantity")}
-          >
-            <option value="Bill of Material">Bill of Material</option>
-            <option value="Bill of Quantity">Bill of Quantity</option>
-          </select>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="flex flex-col gap-3">
+            <label className="text-xs font-medium">Source Document Type</label>
+            <select
+              className="h-9 w-full rounded-md border border-input bg-background px-3 text-xs"
+              value={sourceDocType}
+              onChange={(e) => {
+                setSourceDocType(e.target.value as SourceDocumentType);
+                setSelectedTemplateId("");
+                setBomRows([createEmptyBomRow()]);
+              }}
+              disabled={showProjectFields && !linkedProject}
+            >
+              <option value="BOM">BOM</option>
+              <option value="BOQ">BOQ</option>
+            </select>
+          </div>
+
+          <div className="flex flex-col gap-3">
+            <label className="text-xs font-medium">Select BOM / BOQ</label>
+            <select
+              className="h-9 w-full rounded-md border border-input bg-background px-3 text-xs"
+              value={selectedTemplateId}
+              onChange={(e) => applyTemplateToRows(e.target.value)}
+              disabled={!linkedProject || kind !== "project"}
+            >
+              <option value="">{linkedProject ? "Select source document" : "Select linked project first"}</option>
+              {filteredProjectTemplates.map((template) => (
+                <option key={template.id} value={template.id}>
+                  {template.name}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
+        {kind === "project" && linkedProject && filteredProjectTemplates.length === 0 ? (
+          <p className="text-[11px] text-muted-foreground">No {sourceDocType} templates are available for this project.</p>
+        ) : null}
 
         <div className="space-y-3 rounded-md border border-border p-3">
-          <h4 className="text-xs font-semibold">{billType}</h4>
-          <fieldset className="flex flex-col gap-3">
-            <legend className="sr-only">{billType} input method</legend>
-            <div className="flex flex-wrap items-center gap-4 text-xs">
-              <label className="flex cursor-pointer items-start gap-2 rounded-md p-1 hover:bg-background/80">
-                <input
-                  type="radio"
-                  name="bom-method"
-                  className="mt-0.5 accent-primary"
-                  checked={bomMethod === "upload"}
-                  onChange={() => setBomMethod("upload")}
-                />
-                <span>{`Upload ${billType} file`}</span>
-              </label>
-              <label className="flex cursor-pointer items-start gap-2 rounded-md p-1 hover:bg-background/80">
-                <input
-                  type="radio"
-                  name="bom-method"
-                  className="mt-0.5 accent-primary"
-                  checked={bomMethod === "manual"}
-                  onChange={() => setBomMethod("manual")}
-                />
-                <span>{`Enter ${billType} manually`}</span>
-              </label>
-            </div>
-          </fieldset>
-          {bomMethod === "upload" ? (
-            <div className="space-y-1">
-              <label className="text-xs font-medium">File</label>
-              <Input className="h-9 cursor-pointer text-xs file:mr-2 file:text-xs" type="file" />
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {bomRows.map((row) => (
-                <div
-                  key={row.id}
-                  className="relative flex flex-col gap-3 rounded-md border border-border bg-background p-3"
-                >
-                  {bomRows.length > 1 && (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon-sm"
-                      className="absolute top-2 right-2"
-                      onClick={() => removeBomRow(row.id)}
-                      aria-label="Remove item"
+          <h4 className="text-xs font-semibold">{sourceDocType} Line Items</h4>
+          <div className="space-y-3">
+            {bomRows.map((row) => (
+              <div
+                key={row.id}
+                className="relative flex flex-col gap-3 rounded-md border border-border bg-background p-3"
+              >
+                {bomRows.length > 1 && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    className="absolute top-2 right-2"
+                    onClick={() => removeBomRow(row.id)}
+                    aria-label="Remove item"
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                )}
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="space-y-1">
+                    <label className="text-[11px] text-muted-foreground">Item or Service Name</label>
+                    <Input
+                      className="h-9 text-xs"
+                      placeholder="Requested item or service"
+                      value={row.itemName}
+                      onChange={(e) => updateBomRow(row.id, { itemName: e.target.value })}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[11px] text-muted-foreground">Quantity</label>
+                    <Input
+                      className="h-9 text-xs"
+                      placeholder="Units required"
+                      value={row.quantity}
+                      onChange={(e) => updateBomRow(row.id, { quantity: e.target.value })}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[11px] text-muted-foreground">Unit of Measure</label>
+                    <select
+                      className="h-9 w-full rounded-md border border-input bg-background px-3 text-xs"
+                      value={row.unitOfMeasure}
+                      onChange={(e) => updateBomRow(row.id, { unitOfMeasure: e.target.value })}
                     >
-                      <X className="h-4 w-4" />
-                    </Button>
-                  )}
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <div className="space-y-1">
-                      <label className="text-[11px] text-muted-foreground">Item or Service Name</label>
-                      <Input
-                        className="h-9 text-xs"
-                        placeholder="Requested item or service"
-                        value={row.itemName}
-                        onChange={(e) => updateBomRow(row.id, { itemName: e.target.value })}
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-[11px] text-muted-foreground">Quantity</label>
-                      <Input
-                        className="h-9 text-xs"
-                        placeholder="Units required"
-                        value={row.quantity}
-                        onChange={(e) => updateBomRow(row.id, { quantity: e.target.value })}
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-[11px] text-muted-foreground">Unit of Measure</label>
-                      <select
-                        className="h-9 w-full rounded-md border border-input bg-background px-3 text-xs"
-                        value={row.unitOfMeasure}
-                        onChange={(e) => updateBomRow(row.id, { unitOfMeasure: e.target.value })}
-                      >
-                        <option value="">Select UoM</option>
-                        <option value="pcs">pcs</option>
-                        <option value="kg">kg</option>
-                        <option value="l">L</option>
-                        <option value="svc">service</option>
-                      </select>
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-[11px] text-muted-foreground">Required Date</label>
-                      <Input
-                        className="h-9 text-xs"
-                        type="date"
-                        value={row.requiredDate}
-                        onChange={(e) => updateBomRow(row.id, { requiredDate: e.target.value })}
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-[11px] text-muted-foreground">Estimated cost (optional)</label>
-                      <Input
-                        className="h-9 text-xs"
-                        placeholder="Approximate cost"
-                        value={row.estimatedCost}
-                        onChange={(e) => updateBomRow(row.id, { estimatedCost: e.target.value })}
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-[11px] text-muted-foreground">Line documents</label>
-                      <Input className="h-9 cursor-pointer text-xs file:mr-2 file:text-xs" type="file" />
-                    </div>
+                      <option value="">Select UoM</option>
+                      <option value="pcs">pcs</option>
+                      <option value="kg">kg</option>
+                      <option value="l">L</option>
+                      <option value="svc">service</option>
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[11px] text-muted-foreground">Required Date</label>
+                    <Input
+                      className="h-9 text-xs"
+                      type="date"
+                      value={row.requiredDate}
+                      onChange={(e) => updateBomRow(row.id, { requiredDate: e.target.value })}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[11px] text-muted-foreground">Estimated cost (optional)</label>
+                    <Input
+                      className="h-9 text-xs"
+                      placeholder="Approximate cost"
+                      value={row.estimatedCost}
+                      onChange={(e) => updateBomRow(row.id, { estimatedCost: e.target.value })}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[11px] text-muted-foreground">Specification</label>
+                    <Input
+                      className="h-9 text-xs"
+                      placeholder="Technical specification"
+                      value={row.specification}
+                      onChange={(e) => updateBomRow(row.id, { specification: e.target.value })}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[11px] text-muted-foreground">Line attachment</label>
+                    <Input className="h-9 cursor-pointer text-xs file:mr-2 file:text-xs" type="file" />
                   </div>
                 </div>
-              ))}
-              <div className="flex justify-center">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="h-8 min-w-24 gap-1 hover:border-border hover:bg-muted"
-                  onClick={addBomRow}
-                >
-                  <Plus className="h-3.5 w-3.5" />
-                  Add Item
-                </Button>
               </div>
+            ))}
+            <div className="flex justify-center">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8 min-w-24 gap-1 hover:border-border hover:bg-muted"
+                onClick={addBomRow}
+              >
+                <Plus className="h-3.5 w-3.5" />
+                Add Item
+              </Button>
             </div>
-          )}
+          </div>
         </div>
       </div>
 
@@ -529,7 +661,7 @@ function PurchaseRequisitionForm({ onClose, onSubmit }: { onClose: () => void; o
           className="h-8 min-w-24"
           variant="outline"
           onClick={onClose}
-          disabled={budgetExceeded}
+          disabled={budgetExceeded || (kind === "project" && !selectedTemplateId)}
           title={budgetExceeded ? "Estimated cost exceeds remaining budget" : undefined}
         >
           Save draft
@@ -537,7 +669,7 @@ function PurchaseRequisitionForm({ onClose, onSubmit }: { onClose: () => void; o
         <Button
           className="h-8 min-w-24"
           onClick={submitPr}
-          disabled={budgetExceeded}
+          disabled={budgetExceeded || (kind === "project" && !selectedTemplateId)}
           title={budgetExceeded ? "Estimated cost exceeds remaining budget" : undefined}
         >
           Save
@@ -2163,6 +2295,16 @@ function ProcurementModule({
     | "Pending Sourcing Assignment"
     | "Pending Sourcing"
     | "In Sourcing Process";
+  type PrActionableStatus =
+    | "Draft"
+    | "Rejected"
+    | "Returned for Correction"
+    | "Pending Team Lead Review"
+    | "Approved by Team Lead"
+    | "Pending Sourcing Assignment"
+    | "Pending Sourcing"
+    | "In Sourcing Process"
+    | "Escalated";
   type RfqQuote = {
     supplier: string;
     unitPrice: number;
@@ -2200,12 +2342,18 @@ function ProcurementModule({
     sourceKind: SourceKind;
     projectKey: string | null;
     departmentKey: string | null;
+    prRef?: string;
+    lineItems?: Array<{ name: string; quantity: string; unit: string; specification: string }>;
+    baselineTotal?: number;
+    terms?: string;
     showSubmitApproval?: true;
   };
 
   const [tab, setTab] = useState<ProcurementTab>("Overview");
   const tabs: ProcurementTab[] = ["Overview", "Master Data", "Purchase Requisition", "RFQ", "Purchase Order", "Settings"];
   const [approvalNotice, setApprovalNotice] = useState<string | null>(null);
+  const [prFlowNotice, setPrFlowNotice] = useState<string | null>(null);
+  const [activePrRef, setActivePrRef] = useState<string | null>(null);
   const [submitDoc, setSubmitDoc] = useState<null | {
     documentRef: string;
     docType: DocType;
@@ -2270,6 +2418,7 @@ function ProcurementModule({
     { id: "md-2", itemName: "Packing Tape", category: "Consumables", unitOfMeasure: "roll", sourcingType: "Local", approvedSupplier: "Swift Supplies" },
   ]);
   const [activeRfqId, setActiveRfqId] = useState<string | null>(null);
+  const [activePoId, setActivePoId] = useState<string | null>(null);
   const [supplierFilterCategory, setSupplierFilterCategory] = useState("");
   const [supplierFilterLocation, setSupplierFilterLocation] = useState("");
   const [supplierFilterRating, setSupplierFilterRating] = useState("");
@@ -2337,6 +2486,8 @@ function ProcurementModule({
   );
 
   const activeRfq = useMemo(() => rfqRows.find((r) => r.rfq === activeRfqId) ?? null, [rfqRows, activeRfqId]);
+  const activePo = useMemo(() => poRows.find((r) => r.po === activePoId) ?? null, [poRows, activePoId]);
+  const activePr = useMemo(() => prRows.find((r) => r.ref === activePrRef) ?? null, [prRows, activePrRef]);
   const eligiblePrStatuses: PrEligibleStatus[] = [
     "Approved by Team Lead",
     "Pending Sourcing Assignment",
@@ -2347,6 +2498,100 @@ function ProcurementModule({
   const updateRfq = useCallback((rfqId: string, patch: Partial<RfqRow>) => {
     setRfqRows((prev) => prev.map((row) => (row.rfq === rfqId ? { ...row, ...patch } : row)));
   }, []);
+
+  const updatePr = useCallback((prRef: string, patch: Partial<PrRow>) => {
+    setPrRows((prev) => prev.map((row) => (row.ref === prRef ? { ...row, ...patch } : row)));
+  }, []);
+
+  const editablePrStatuses: PrActionableStatus[] = ["Draft", "Rejected", "Returned for Correction"];
+
+  const submitPrForTeamLeadReview = useCallback(
+    (row: PrRow) => {
+      updatePr(row.ref, {
+        status: "Pending Team Lead Review",
+        sla: "24h",
+        showSubmitApproval: undefined,
+      });
+      setPrFlowNotice(`${row.ref} submitted for Team Leader review.`);
+    },
+    [updatePr]
+  );
+
+  const approvePrByTeamLead = useCallback(
+    (row: PrRow) => {
+      updatePr(row.ref, {
+        status: "Pending Sourcing Assignment",
+        owner: "Sourcing Team Leader",
+        sla: "24h",
+      });
+      setPrFlowNotice(`${row.ref} approved by Team Leader and routed to sourcing assignment.`);
+    },
+    [updatePr]
+  );
+
+  const rejectPrByTeamLead = useCallback(
+    (row: PrRow) => {
+      const comment = typeof window !== "undefined" ? window.prompt("Rejection comment", "Insufficient justification") : "";
+      updatePr(row.ref, {
+        status: "Rejected",
+        owner: row.requester,
+        sla: "-",
+        terms: comment?.trim() ? `${row.terms}\n\nTeam Leader Rejection: ${comment.trim()}` : row.terms,
+        showSubmitApproval: true,
+      });
+      setPrFlowNotice(`${row.ref} rejected and returned to requester.`);
+    },
+    [updatePr]
+  );
+
+  const returnPrForCorrection = useCallback(
+    (row: PrRow) => {
+      const comment = typeof window !== "undefined" ? window.prompt("Return for correction comment", "Please attach missing technical details") : "";
+      updatePr(row.ref, {
+        status: "Returned for Correction",
+        owner: row.requester,
+        sla: "-",
+        terms: comment?.trim() ? `${row.terms}\n\nCorrection Request: ${comment.trim()}` : row.terms,
+        showSubmitApproval: true,
+      });
+      setPrFlowNotice(`${row.ref} returned for correction.`);
+    },
+    [updatePr]
+  );
+
+  const assignSourcingEngineer = useCallback(
+    (row: PrRow) => {
+      const assignee =
+        typeof window !== "undefined" ? window.prompt("Assign sourcing engineer", "Sourcing Engineer - Hana") : "Sourcing Engineer";
+      updatePr(row.ref, {
+        status: "Pending Sourcing",
+        owner: assignee?.trim() || "Sourcing Engineer",
+        sla: "48h",
+      });
+      setPrFlowNotice(`${row.ref} assigned to ${assignee?.trim() || "Sourcing Engineer"}.`);
+    },
+    [updatePr]
+  );
+
+  const acceptAssignedPr = useCallback(
+    (row: PrRow) => {
+      updatePr(row.ref, { status: "In Sourcing Process", sla: "In progress" });
+      setPrFlowNotice(`${row.ref} accepted by sourcing and moved to In Sourcing Process.`);
+    },
+    [updatePr]
+  );
+
+  const sendPrFollowUp = useCallback((row: PrRow) => {
+    setPrFlowNotice(`Follow-up sent for ${row.ref} to ${row.owner}.`);
+  }, []);
+
+  const escalatePr = useCallback(
+    (row: PrRow) => {
+      updatePr(row.ref, { status: "Escalated", owner: "Sourcing Team Leader", sla: "Overdue" });
+      setPrFlowNotice(`${row.ref} escalated due to SLA risk.`);
+    },
+    [updatePr]
+  );
 
   const createRfqFromPr = useCallback((prRef: string) => {
     const pr = prRows.find((p) => p.ref === prRef);
@@ -2377,6 +2622,61 @@ function ProcurementModule({
     setTab("RFQ");
     setRfqFlowNotice(`Draft ${rfqId} created from ${pr.ref}. Complete fields and send to suppliers.`);
   }, [prRows, rfqRows.length]);
+
+  const createPoFromPr = useCallback((prRef: string) => {
+    const pr = prRows.find((p) => p.ref === prRef);
+    if (!pr) return;
+    const poId = `PO-${1000 + poRows.length + 1}`;
+    const nextPo: PoRow = {
+      po: poId,
+      supplier: "TBD Supplier",
+      approval: "Draft",
+      orderSource: pr.sourceKind === "project" ? "Project" : "Department",
+      requestType: pr.typeLabel.replace(" PR", ""),
+      sourceKind: pr.sourceKind,
+      projectKey: pr.projectKey,
+      departmentKey: pr.departmentKey,
+      prRef: pr.ref,
+      lineItems: pr.lineItems,
+      baselineTotal: pr.baselineTotal,
+      terms: pr.terms,
+      showSubmitApproval: true,
+    };
+    setPoRows((prev) => [nextPo, ...prev]);
+    setActivePoId(poId);
+    setTab("Purchase Order");
+    setPrFlowNotice(`Draft ${poId} prefilled from ${pr.ref}.`);
+  }, [prRows, poRows.length]);
+
+  const createRfqFromPo = useCallback((poId: string) => {
+    const po = poRows.find((row) => row.po === poId);
+    if (!po) return;
+    const pr = po.prRef ? prRows.find((x) => x.ref === po.prRef) : undefined;
+    const rfqId = `RFQ-${rfqRows.length + 1001}`;
+    const next: RfqRow = {
+      rfq: rfqId,
+      title: `${(pr?.entityLabel ?? po.orderSource)} sourcing`,
+      prRef: pr?.ref ?? po.prRef ?? "N/A",
+      suppliers: "0 Suppliers",
+      deadline: "",
+      status: "Draft",
+      sourceKind: pr?.sourceKind ?? po.sourceKind,
+      projectKey: pr?.projectKey ?? po.projectKey,
+      departmentKey: pr?.departmentKey ?? po.departmentKey,
+      deliveryTimeline: "30 days after award",
+      terms: pr?.terms ?? po.terms ?? "Supplier must comply with agreed quality and delivery terms.",
+      baselineTotal: pr?.baselineTotal ?? po.baselineTotal ?? 0,
+      lineItems: pr?.lineItems ?? po.lineItems ?? [{ name: "General item", quantity: "1", unit: "pcs", specification: "As requested" }],
+      selectedSuppliers: [],
+      quotations: [],
+      awardedSupplier: null,
+      notificationTriggered: false,
+    };
+    setRfqRows((prev) => [next, ...prev]);
+    setActiveRfqId(rfqId);
+    setTab("RFQ");
+    setRfqFlowNotice(`Draft ${rfqId} prefilled from ${po.po}${pr?.ref ? ` (source ${pr.ref})` : ""}.`);
+  }, [poRows, prRows, rfqRows.length]);
 
   return (
     <div className="space-y-4">
@@ -2557,6 +2857,9 @@ function ProcurementModule({
 
       {tab === "Purchase Requisition" && (
         <div className="space-y-4">
+          {prFlowNotice ? (
+            <p className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-900">{prFlowNotice}</p>
+          ) : null}
           {approvalNotice ? (
             <p
               className={cn(
@@ -2634,40 +2937,67 @@ function ProcurementModule({
                         </td>
                         <td className="px-3 py-2">{row.sla}</td>
                         <td className="px-3 py-2">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <Button size="sm" variant="ghost">
-                              View
-                            </Button>
-                            <TableEditIconButton onClick={() => {}} aria-label="Edit PR" />
-                            {"showSubmitApproval" in row && row.showSubmitApproval ? (
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                className="h-7 text-[11px]"
-                                onClick={() =>
-                                  setSubmitDoc({
-                                    documentRef: "PR-1025",
-                                    docType: "PR",
-                                    title: "Road expansion materials",
-                                    amountStr: "4200",
-                                    dept: "ops",
-                                  })
-                                }
-                              >
-                                Submit for approval
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button type="button" variant="ghost" size="icon-sm" className="h-8 w-8" aria-label="More PR actions">
+                                <MoreVertical className="h-4 w-4" />
                               </Button>
-                            ) : null}
-                            {eligiblePrStatuses.includes(row.status as PrEligibleStatus) ? (
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                className="h-7 text-[11px]"
-                                onClick={() => createRfqFromPr(row.ref)}
-                              >
-                                Prefill RFQ from PR
-                              </Button>
-                            ) : null}
-                          </div>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end" className="w-48">
+                              <DropdownMenuItem onClick={() => setActivePrRef(row.ref)}>View details</DropdownMenuItem>
+                              {editablePrStatuses.includes(row.status as PrActionableStatus) ? (
+                                <DropdownMenuItem onClick={() => setPrFlowNotice(`${row.ref} is open for editing and resubmission.`)}>
+                                  Edit / Resubmit
+                                </DropdownMenuItem>
+                              ) : null}
+                              {"showSubmitApproval" in row && row.showSubmitApproval ? (
+                                <DropdownMenuItem
+                                  onClick={() => {
+                                    if (editablePrStatuses.includes(row.status as PrActionableStatus)) {
+                                      submitPrForTeamLeadReview(row);
+                                      return;
+                                    }
+                                    setSubmitDoc({
+                                      documentRef: row.ref,
+                                      docType: "PR",
+                                      title: `${row.typeLabel} - ${row.entityLabel}`,
+                                      amountStr: String(row.baselineTotal),
+                                      dept: row.departmentKey ?? "ops",
+                                    });
+                                  }}
+                                >
+                                  Submit for approval
+                                </DropdownMenuItem>
+                              ) : null}
+                              {row.status === "Pending Team Lead Review" ? (
+                                <DropdownMenuItem onClick={() => approvePrByTeamLead(row)}>Approve (Team Leader)</DropdownMenuItem>
+                              ) : null}
+                              {row.status === "Pending Team Lead Review" ? (
+                                <DropdownMenuItem onClick={() => returnPrForCorrection(row)}>Return for correction</DropdownMenuItem>
+                              ) : null}
+                              {row.status === "Pending Team Lead Review" ? (
+                                <DropdownMenuItem onClick={() => rejectPrByTeamLead(row)}>Reject with comment</DropdownMenuItem>
+                              ) : null}
+                              {row.status === "Pending Sourcing Assignment" ? (
+                                <DropdownMenuItem onClick={() => assignSourcingEngineer(row)}>Assign sourcing engineer</DropdownMenuItem>
+                              ) : null}
+                              {row.status === "Pending Sourcing" ? (
+                                <DropdownMenuItem onClick={() => acceptAssignedPr(row)}>Accept assignment (Sourcing Engineer)</DropdownMenuItem>
+                              ) : null}
+                              {row.status === "Pending Team Lead Review" ||
+                              row.status === "Pending Sourcing Assignment" ||
+                              row.status === "Pending Sourcing" ? (
+                                <DropdownMenuItem onClick={() => escalatePr(row)}>Escalate overdue PR</DropdownMenuItem>
+                              ) : null}
+                              <DropdownMenuItem onClick={() => sendPrFollowUp(row)}>Send follow-up</DropdownMenuItem>
+                              {row.status === "In Sourcing Process" ? (
+                                <DropdownMenuItem onClick={() => createPoFromPr(row.ref)}>Prefill PO from PR</DropdownMenuItem>
+                              ) : null}
+                              {eligiblePrStatuses.includes(row.status as PrEligibleStatus) ? (
+                                <DropdownMenuItem onClick={() => createRfqFromPr(row.ref)}>Prefill RFQ from PR</DropdownMenuItem>
+                              ) : null}
+                            </DropdownMenuContent>
+                          </DropdownMenu>
                         </td>
                       </tr>
                     ))}
@@ -2680,6 +3010,48 @@ function ProcurementModule({
               </p>
             </CardContent>
           </Card>
+          {activePr ? (
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center justify-between gap-2">
+                  <span>PR Details: {activePr.ref}</span>
+                  <StatusBadge value={activePr.status} />
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4 text-xs">
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <p><span className="font-medium">Requester:</span> {activePr.requester}</p>
+                  <p><span className="font-medium">Owner:</span> {activePr.owner}</p>
+                  <p><span className="font-medium">Timeline:</span> {activePr.sla}</p>
+                </div>
+                <p className="rounded-md bg-muted/60 px-3 py-2">
+                  <span className="font-medium">Justification:</span> {activePr.terms || "N/A"}
+                </p>
+                <div className="overflow-hidden rounded-md border border-border">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-muted/60">
+                      <tr>
+                        <th className="px-3 py-2">Item</th>
+                        <th className="px-3 py-2">Qty</th>
+                        <th className="px-3 py-2">Unit</th>
+                        <th className="px-3 py-2">Specification</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {activePr.lineItems.map((item, idx) => (
+                        <tr key={`${activePr.ref}-${idx}`} className="border-t border-border/50">
+                          <td className="px-3 py-2">{item.name}</td>
+                          <td className="px-3 py-2">{item.quantity}</td>
+                          <td className="px-3 py-2">{item.unit}</td>
+                          <td className="px-3 py-2">{item.specification}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </CardContent>
+            </Card>
+          ) : null}
 
         </div>
       )}
@@ -2744,12 +3116,17 @@ function ProcurementModule({
                           <StatusBadge value={row.status} />
                         </td>
                         <td className="px-3 py-2">
-                          <div className="flex items-center gap-2">
-                            <Button size="sm" variant="ghost" onClick={() => setActiveRfqId(row.rfq)}>
-                              View
-                            </Button>
-                            <TableEditIconButton onClick={() => setActiveRfqId(row.rfq)} aria-label="Edit RFQ" />
-                          </div>
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button type="button" variant="ghost" size="icon-sm" className="h-8 w-8" aria-label="More RFQ actions">
+                                <MoreVertical className="h-4 w-4" />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end" className="w-40">
+                              <DropdownMenuItem onClick={() => setActiveRfqId(row.rfq)}>View</DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => setActiveRfqId(row.rfq)}>Edit</DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
                         </td>
                       </tr>
                     ))}
@@ -3009,37 +3386,33 @@ function ProcurementModule({
                         <td className="px-3 py-2">{row.orderSource}</td>
                         <td className="px-3 py-2">{row.requestType}</td>
                         <td className="px-3 py-2">
-                          {"showSubmitApproval" in row && row.showSubmitApproval ? (
-                            <div className="flex flex-wrap items-center gap-2">
-                              <Button size="sm" variant="ghost">
-                                View
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button type="button" variant="ghost" size="icon-sm" className="h-8 w-8" aria-label="More PO actions">
+                                <MoreVertical className="h-4 w-4" />
                               </Button>
-                              <TableEditIconButton onClick={() => {}} aria-label="Edit purchase order" />
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                className="h-7 text-[11px]"
-                                onClick={() =>
-                                  setSubmitDoc({
-                                    documentRef: "PO-1006",
-                                    docType: "PO",
-                                    title: "Logistics services renewal",
-                                    amountStr: "32000",
-                                    dept: "ops",
-                                  })
-                                }
-                              >
-                                Submit for approval
-                              </Button>
-                            </div>
-                          ) : (
-                            <div className="flex items-center gap-2">
-                              <Button size="sm" variant="ghost">
-                                View
-                              </Button>
-                              <TableEditIconButton onClick={() => {}} aria-label="Edit purchase order" />
-                            </div>
-                          )}
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end" className="w-48">
+                              <DropdownMenuItem>View</DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => setActivePoId(row.po)}>Edit</DropdownMenuItem>
+                              {"showSubmitApproval" in row && row.showSubmitApproval ? (
+                                <DropdownMenuItem
+                                  onClick={() =>
+                                    setSubmitDoc({
+                                      documentRef: "PO-1006",
+                                      docType: "PO",
+                                      title: "Logistics services renewal",
+                                      amountStr: "32000",
+                                      dept: "ops",
+                                    })
+                                  }
+                                >
+                                  Submit for approval
+                                </DropdownMenuItem>
+                              ) : null}
+                              <DropdownMenuItem onClick={() => createRfqFromPo(row.po)}>Prefill RFQ from PO</DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
                         </td>
                       </tr>
                     ))}
@@ -3052,6 +3425,56 @@ function ProcurementModule({
               </p>
             </CardContent>
           </Card>
+          {activePo ? (
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center justify-between gap-2">
+                  <span>PO Details: {activePo.po}</span>
+                  <StatusBadge value={activePo.approval} />
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4 text-xs">
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <p><span className="font-medium">Source PR:</span> {activePo.prRef ?? "N/A"}</p>
+                  <p><span className="font-medium">Order Source:</span> {activePo.orderSource}</p>
+                  <p><span className="font-medium">Request Type:</span> {activePo.requestType}</p>
+                </div>
+                {activePo.terms ? (
+                  <p className="rounded-md bg-muted/60 px-3 py-2">
+                    <span className="font-medium">Notes:</span> {activePo.terms}
+                  </p>
+                ) : null}
+                <div className="overflow-hidden rounded-md border border-border">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-muted/60">
+                      <tr>
+                        <th className="px-3 py-2">Item</th>
+                        <th className="px-3 py-2">Qty</th>
+                        <th className="px-3 py-2">Unit</th>
+                        <th className="px-3 py-2">Specification</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(activePo.lineItems ?? []).length === 0 ? (
+                        <tr className="border-t border-border/50">
+                          <td className="px-3 py-2 text-muted-foreground" colSpan={4}>No line items available.</td>
+                        </tr>
+                      ) : (
+                        (activePo.lineItems ?? []).map((item, idx) => (
+                          <tr key={`${activePo.po}-${idx}`} className="border-t border-border/50">
+                            <td className="px-3 py-2">{item.name}</td>
+                            <td className="px-3 py-2">{item.quantity}</td>
+                            <td className="px-3 py-2">{item.unit}</td>
+                            <td className="px-3 py-2">{item.specification}</td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </CardContent>
+            </Card>
+          ) : null}
         </div>
       )}
 
@@ -3104,6 +3527,14 @@ function ProcurementModule({
                     msg ??
                       `${submitDoc.documentRef} submitted for approval. Track it under Approvals → All workflows.`
                   );
+                  if (submitDoc.docType === "PR") {
+                    updatePr(submitDoc.documentRef, {
+                      status: "Pending Team Lead Review",
+                      sla: "24h",
+                      showSubmitApproval: undefined,
+                    });
+                    setPrFlowNotice(`${submitDoc.documentRef} submitted and moved to Pending Team Lead Review.`);
+                  }
                   setSubmitDoc(null);
                 }}
               >
@@ -4642,7 +5073,7 @@ function BudgetModule() {
                           <DropdownMenu>
                             <DropdownMenuTrigger asChild>
                               <Button type="button" variant="ghost" size="icon-sm" className="h-8 w-8" aria-label="More budget actions">
-                                <MoreHorizontal className="h-4 w-4" />
+                                <MoreVertical className="h-4 w-4" />
                               </Button>
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end" className="w-40">

@@ -2,14 +2,15 @@
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import { AlertTriangle, CircleAlert, Package, Plus, Search, Warehouse, X } from "lucide-react";
+import { AlertTriangle, CircleAlert, MoreVertical, Package, Plus, Search, Warehouse, X } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 
 const PRIMARY = "#0D9488";
 
-type InventoryTab = "Overview" | "Stock" | "Movements";
+type InventoryTab = "Overview" | "Stock" | "Transaction" | "Requested" | "Returned";
 
 type InvLocationType = "Warehouse" | "Site" | "Bin";
 
@@ -20,7 +21,7 @@ type InvLocation = {
   description: string;
 };
 
-type InvItemCategory = "Item" | "Tool" | "Asset";
+type InvItemCategory = "Stock Item" | "Consumable Item" | "Service Item" | "Asset Item";
 
 type InvStockRow = {
   id: string;
@@ -39,6 +40,7 @@ type InvMovement = {
   id: string;
   itemName: string;
   type: InvMovementType;
+  transactionType: string;
   quantity: number;
   fromLocationId: string | null;
   toLocationId: string | null;
@@ -47,6 +49,20 @@ type InvMovement = {
 };
 
 type InvMovementUiKind = "receive" | "issue" | "transfer" | "return";
+type InvRequestMode = "single" | "bulk";
+type ReturnReviewStatus = "Pending" | "Approved" | "Rejected";
+type InvRequestRecord = {
+  id: string;
+  itemName: string;
+  quantity: number;
+  uom: string;
+  projectKey: string;
+  departmentKey: string;
+  mode: InvRequestMode;
+  requestedAt: string;
+  status: "Pending" | "Approved" | "Rejected";
+  reviewedAt: string | null;
+};
 
 const INV_DEFAULT_MIN = 10;
 
@@ -101,7 +117,7 @@ function InventoryTabs({
   tab: InventoryTab;
   onTab: (t: InventoryTab) => void;
 }) {
-  const items: InventoryTab[] = ["Overview", "Stock", "Movements"];
+  const items: InventoryTab[] = ["Overview", "Stock", "Transaction", "Requested", "Returned"];
   return (
     <div className="flex flex-wrap gap-8 border-b border-transparent">
       {items.map((item) => {
@@ -154,7 +170,7 @@ export function InventoryModule() {
     {
       id: "stk-1",
       itemName: "Cast Iron Valve 4\"",
-      category: "Item",
+      category: "Stock Item",
       available: 220,
       reserved: 40,
       uom: "pcs",
@@ -164,7 +180,7 @@ export function InventoryModule() {
     {
       id: "stk-2",
       itemName: "Stainless Bolts M16",
-      category: "Tool",
+      category: "Consumable Item",
       available: 90,
       reserved: 22,
       uom: "pcs",
@@ -174,7 +190,7 @@ export function InventoryModule() {
     {
       id: "stk-3",
       itemName: "Electrical Cable 3×2.5",
-      category: "Item",
+      category: "Stock Item",
       available: 0,
       reserved: 0,
       uom: "m",
@@ -184,7 +200,7 @@ export function InventoryModule() {
     {
       id: "stk-4",
       itemName: "Hydraulic Hose Assembly",
-      category: "Asset",
+      category: "Asset Item",
       available: 45,
       reserved: 8,
       uom: "pcs",
@@ -198,6 +214,7 @@ export function InventoryModule() {
       id: "MOV-0001",
       itemName: "Cast Iron Valve 4\"",
       type: "In",
+      transactionType: "Purchase receipt (from PO)",
       quantity: 120,
       fromLocationId: null,
       toLocationId: "loc-4",
@@ -208,6 +225,7 @@ export function InventoryModule() {
       id: "MOV-0002",
       itemName: "Stainless Bolts M16",
       type: "Out",
+      transactionType: "Sales issue (delivery)",
       quantity: 30,
       fromLocationId: "loc-2",
       toLocationId: null,
@@ -218,6 +236,7 @@ export function InventoryModule() {
       id: "MOV-0003",
       itemName: "Hydraulic Hose Assembly",
       type: "Transfer",
+      transactionType: "Internal (movement)",
       quantity: 12,
       fromLocationId: "loc-1",
       toLocationId: "loc-3",
@@ -228,6 +247,7 @@ export function InventoryModule() {
       id: "MOV-0004",
       itemName: "Electrical Cable 3×2.5",
       type: "Out",
+      transactionType: "Consumption (project or department use)",
       quantity: 80,
       fromLocationId: "loc-1",
       toLocationId: null,
@@ -238,6 +258,7 @@ export function InventoryModule() {
       id: "MOV-0005",
       itemName: "Stainless Bolts M16",
       type: "Return",
+      transactionType: "Customer return",
       quantity: 15,
       fromLocationId: null,
       toLocationId: "loc-2",
@@ -248,6 +269,7 @@ export function InventoryModule() {
       id: "MOV-0006",
       itemName: "Stainless Bolts M16",
       type: "In",
+      transactionType: "Purchase receipt (from PO)",
       quantity: 200,
       fromLocationId: null,
       toLocationId: "loc-2",
@@ -279,9 +301,15 @@ export function InventoryModule() {
     reference: "",
     date: "",
   });
+  const [inboundTransactionType, setInboundTransactionType] = useState<
+    "Purchase receipt (from PO)" | "Production output" | "Customer return" | "Transfer in"
+  >("Purchase receipt (from PO)");
+  const [outboundTransactionType, setOutboundTransactionType] = useState<
+    "Sales issue (delivery)" | "Consumption (project or department use)" | "Scrap / damage" | "Transfer out"
+  >("Sales issue (delivery)");
 
   const [addItemForm, setAddItemForm] = useState({
-    category: "Item" as InvItemCategory,
+    category: "Stock Item" as InvItemCategory,
     name: "",
     quantity: "",
     uom: "",
@@ -309,6 +337,16 @@ export function InventoryModule() {
   const [stockCategoryFilter, setStockCategoryFilter] = useState<string>("All");
   const [stockLocFilter, setStockLocFilter] = useState("");
   const [stockStatusFilter, setStockStatusFilter] = useState("All");
+  const [selectedStockIds, setSelectedStockIds] = useState<string[]>([]);
+  const [stockNotice, setStockNotice] = useState<string | null>(null);
+  const [requestModalOpen, setRequestModalOpen] = useState(false);
+  const [requestMode, setRequestMode] = useState<InvRequestMode>("single");
+  const [requestProjectKey, setRequestProjectKey] = useState("");
+  const [requestDepartmentKey, setRequestDepartmentKey] = useState("");
+  const [requestRows, setRequestRows] = useState<Array<{ id: string; itemName: string; quantity: string; uom: string }>>([]);
+  const [requestError, setRequestError] = useState("");
+  const [requestRecords, setRequestRecords] = useState<InvRequestRecord[]>([]);
+  const [returnReviewById, setReturnReviewById] = useState<Record<string, { status: ReturnReviewStatus; reviewedAt: string | null }>>({});
 
   const [movSearch, setMovSearch] = useState("");
   const [movTypeFilter, setMovTypeFilter] = useState("All");
@@ -326,13 +364,13 @@ export function InventoryModule() {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   }, []);
 
-  const openMovementModal = useCallback(() => {
+  const openMovementModal = useCallback((kind: InvMovementUiKind = "receive") => {
     const loc0 = locations[0]?.id ?? "";
     const loc1 = locations[1]?.id ?? "";
     const firstItem = itemOptions[0] ?? "";
     const u0 = stockRows.find((r) => r.itemName === firstItem)?.uom ?? "pcs";
     setMovementForm({
-      kind: "receive",
+      kind,
       itemName: firstItem,
       quantity: "",
       uom: u0,
@@ -342,12 +380,14 @@ export function InventoryModule() {
       reference: "",
       date: todayStr,
     });
+    setInboundTransactionType("Purchase receipt (from PO)");
+    setOutboundTransactionType("Sales issue (delivery)");
     setMovementModalOpen(true);
   }, [itemOptions, locations, stockRows, todayStr]);
 
   const openAddItemModal = useCallback(() => {
     setAddItemForm({
-      category: "Item",
+      category: "Stock Item",
       name: "",
       quantity: "",
       uom: "pcs",
@@ -389,6 +429,17 @@ export function InventoryModule() {
     return [...movements].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0)).slice(0, 6);
   }, [movements]);
 
+  const returnedRows = useMemo(() => {
+    return [...movements]
+      .filter((m) => m.type === "Return")
+      .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+  }, [movements]);
+
+  const returnedRowReview = useCallback(
+    (movementId: string) => returnReviewById[movementId] ?? { status: "Pending" as const, reviewedAt: null },
+    [returnReviewById],
+  );
+
   const filteredStock = useMemo(() => {
     return stockRows.filter((row) => {
       const status = invStockStatus(row.available, row.minLevel);
@@ -399,6 +450,8 @@ export function InventoryModule() {
       return true;
     });
   }, [stockRows, stockSearch, stockLocFilter, stockStatusFilter, stockCategoryFilter]);
+
+  const allFilteredSelected = filteredStock.length > 0 && filteredStock.every((row) => selectedStockIds.includes(row.id));
 
   const filteredMovements = useMemo(() => {
     return movements.filter((m) => {
@@ -437,14 +490,207 @@ export function InventoryModule() {
     ]);
     setAddItemProjectError("");
     setAddItemModalOpen(false);
+    setStockNotice(`${addItemForm.category} "${addItemForm.name.trim()}" added successfully.`);
   }, [addItemForm]);
+
+  const toggleStockSelection = useCallback((id: string) => {
+    setSelectedStockIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  }, []);
+
+  const toggleAllFilteredSelection = useCallback(() => {
+    setSelectedStockIds((prev) => {
+      const filteredIds = filteredStock.map((row) => row.id);
+      const isAllSelected = filteredIds.every((id) => prev.includes(id));
+      if (isAllSelected) return prev.filter((id) => !filteredIds.includes(id));
+      return Array.from(new Set([...prev, ...filteredIds]));
+    });
+  }, [filteredStock]);
+
+  const openRequestModal = useCallback(
+    (ids: string[], mode: InvRequestMode) => {
+      if (ids.length === 0) return;
+      const rows = stockRows.filter((row) => ids.includes(row.id));
+      setRequestMode(mode);
+      setRequestProjectKey("");
+      setRequestDepartmentKey("");
+      setRequestError("");
+      setRequestRows(
+        rows.map((row) => ({
+          id: row.id,
+          itemName: row.itemName,
+          quantity: "1",
+          uom: row.uom,
+        })),
+      );
+      setRequestModalOpen(true);
+    },
+    [stockRows],
+  );
+
+  const submitRequest = useCallback(() => {
+    const validQty = requestRows.every((row) => Number.isFinite(Number(row.quantity)) && Number(row.quantity) > 0);
+    if (!validQty) {
+      setRequestError("All quantities must be greater than 0.");
+      return;
+    }
+    const projectLabel = requestProjectKey
+      ? (INV_PROJECT_OPTIONS.find((p) => p.value === requestProjectKey)?.label ?? requestProjectKey)
+      : "No project";
+    const departmentLabel = requestDepartmentKey
+      ? (INV_DEPT_OPTIONS.find((d) => d.value === requestDepartmentKey)?.label ?? requestDepartmentKey)
+      : "No department";
+    setStockNotice(
+      `${requestMode === "single" ? "Single" : "Bulk"} request submitted for ${requestRows.length} item(s) under ${projectLabel} / ${departmentLabel}.`,
+    );
+    setRequestRecords((prev) => [
+      ...requestRows.map((row) => ({
+        id: typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `req-${Date.now()}-${row.id}`,
+        itemName: row.itemName,
+        quantity: Number(row.quantity),
+        uom: row.uom,
+        projectKey: requestProjectKey,
+        departmentKey: requestDepartmentKey,
+        mode: requestMode,
+        requestedAt: todayStr,
+        status: "Pending" as const,
+        reviewedAt: null,
+      })),
+      ...prev,
+    ]);
+    setRequestModalOpen(false);
+    setRequestError("");
+  }, [requestDepartmentKey, requestMode, requestProjectKey, requestRows, todayStr]);
+
+  const approveRequestRecord = useCallback(
+    (requestId: string) => {
+      const request = requestRecords.find((r) => r.id === requestId);
+      if (!request || request.status !== "Pending") return;
+
+      const totalAvailable = stockRows
+        .filter((row) => row.itemName === request.itemName)
+        .reduce((sum, row) => sum + row.available, 0);
+      if (totalAvailable < request.quantity) {
+        setStockNotice(
+          `Cannot approve ${request.itemName}. Requested ${request.quantity} ${request.uom}, but only ${totalAvailable} available in stock.`,
+        );
+        return;
+      }
+
+      let remaining = request.quantity;
+      setStockRows((prev) =>
+        prev.map((row) => {
+          if (row.itemName !== request.itemName || remaining <= 0) return row;
+          const deduct = Math.min(row.available, remaining);
+          remaining -= deduct;
+          return { ...row, available: row.available - deduct };
+        }),
+      );
+
+      setRequestRecords((prev) =>
+        prev.map((row) =>
+          row.id === requestId ? { ...row, status: "Approved", reviewedAt: todayStr } : row,
+        ),
+      );
+      setStockNotice(`${request.itemName} request approved and ${request.quantity} ${request.uom} deducted from stock.`);
+    },
+    [requestRecords, stockRows, todayStr],
+  );
+
+  const rejectRequestRecord = useCallback(
+    (requestId: string) => {
+      setRequestRecords((prev) =>
+        prev.map((row) =>
+          row.id === requestId && row.status === "Pending"
+            ? { ...row, status: "Rejected", reviewedAt: todayStr }
+            : row,
+        ),
+      );
+      setStockNotice("Request rejected.");
+    },
+    [todayStr],
+  );
+
+  const approveReturnRecord = useCallback(
+    (movementId: string) => {
+      const movement = movements.find((m) => m.id === movementId && m.type === "Return");
+      if (!movement) return;
+      if ((returnReviewById[movementId]?.status ?? "Pending") !== "Pending") return;
+      if (!movement.toLocationId) {
+        setStockNotice(`Cannot approve return ${movement.id} because destination location is missing.`);
+        return;
+      }
+
+      setStockRows((prev) => {
+        const idx = prev.findIndex((r) => r.itemName === movement.itemName && r.locationId === movement.toLocationId);
+        if (idx >= 0) {
+          return prev.map((r, i) => (i === idx ? { ...r, available: r.available + movement.quantity } : r));
+        }
+        const template = prev.find((r) => r.itemName === movement.itemName);
+        return [
+          ...prev,
+          {
+            id: typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `stk-${Date.now()}`,
+            itemName: movement.itemName,
+            category: template?.category ?? "Stock Item",
+            available: movement.quantity,
+            reserved: 0,
+            uom: template?.uom ?? "pcs",
+            locationId: movement.toLocationId,
+            minLevel: template?.minLevel ?? INV_DEFAULT_MIN,
+          },
+        ];
+      });
+
+      setReturnReviewById((prev) => ({
+        ...prev,
+        [movementId]: { status: "Approved", reviewedAt: todayStr },
+      }));
+      setStockNotice(`Return ${movement.id} approved. ${movement.quantity} added back to stock.`);
+    },
+    [movements, returnReviewById, todayStr],
+  );
+
+  const rejectReturnRecord = useCallback(
+    (movementId: string) => {
+      if ((returnReviewById[movementId]?.status ?? "Pending") !== "Pending") return;
+      setReturnReviewById((prev) => ({
+        ...prev,
+        [movementId]: { status: "Rejected", reviewedAt: todayStr },
+      }));
+      setStockNotice(`Return request ${movementId} rejected.`);
+    },
+    [returnReviewById, todayStr],
+  );
+
+  const editStockRows = useCallback((ids: string[]) => {
+    if (ids.length === 0) return;
+    const nextMinLevel = typeof window !== "undefined" ? window.prompt("Set new minimum level for selected items/tools", "25") : null;
+    const parsed = Number(nextMinLevel);
+    if (!Number.isFinite(parsed) || parsed < 0) return;
+    setStockRows((prev) => prev.map((row) => (ids.includes(row.id) ? { ...row, minLevel: parsed } : row)));
+    setStockNotice(`Updated minimum level to ${parsed} for ${ids.length} selected item(s).`);
+  }, []);
+
+  const deleteStockRows = useCallback((ids: string[]) => {
+    if (ids.length === 0) return;
+    const confirmed =
+      typeof window !== "undefined"
+        ? window.confirm(
+            `Warning: You are about to delete ${ids.length} item/tool record(s). This action cannot be undone. Do you want to continue?`,
+          )
+        : true;
+    if (!confirmed) return;
+    setStockRows((prev) => prev.filter((row) => !ids.includes(row.id)));
+    setSelectedStockIds((prev) => prev.filter((id) => !ids.includes(id)));
+    setStockNotice(`Deleted ${ids.length} item/tool record(s) in one operation.`);
+  }, []);
 
   const submitMovement = useCallback(() => {
     const { kind, itemName, quantity, locationId, fromLocationId, toLocationId, reference, date, uom } = movementForm;
     const qty = Number(quantity);
     if (!itemName || !Number.isFinite(qty) || qty <= 0) return;
 
-    const applyReceiveOrReturn = (movType: "In" | "Return") => {
+    const applyReceiveOnly = () => {
       if (!locationId) return;
       setStockRows((prev) => {
         const idx = prev.findIndex((r) => r.itemName === itemName && r.locationId === locationId);
@@ -454,7 +700,7 @@ export function InventoryModule() {
         const template = prev.find((r) => r.itemName === itemName);
         const u = (uom || template?.uom || "pcs").trim() || "pcs";
         const minLevel = template?.minLevel ?? INV_DEFAULT_MIN;
-        const cat = template?.category ?? "Item";
+        const cat = template?.category ?? "Stock Item";
         const id =
           typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `stk-${String(prev.length)}`;
         return [...prev, { id, itemName, category: cat, available: qty, reserved: 0, uom: u, locationId, minLevel }];
@@ -464,7 +710,8 @@ export function InventoryModule() {
         {
           id: nextMovementId(prev),
           itemName,
-          type: movType,
+          type: "In",
+          transactionType: inboundTransactionType,
           quantity: qty,
           fromLocationId: null,
           toLocationId: locationId,
@@ -474,48 +721,16 @@ export function InventoryModule() {
       ]);
     };
 
-    if (kind === "receive") {
-      applyReceiveOrReturn("In");
-    } else if (kind === "return") {
-      applyReceiveOrReturn("Return");
-    } else if (kind === "issue") {
-      if (!locationId) return;
-      const row = stockRows.find((r) => r.itemName === itemName && r.locationId === locationId);
-      if (!row) {
-        window.alert("No stock for this item at the selected location.");
-        return;
-      }
-      if (row.available < qty) {
-        window.alert("Not enough available quantity to issue (reserved stock is not usable).");
-        return;
-      }
-      setStockRows((prev) => {
-        const idx = prev.findIndex((r) => r.itemName === itemName && r.locationId === locationId);
-        return prev.map((r, i) => (i === idx ? { ...r, available: r.available - qty } : r));
-      });
-      setMovements((prev) => [
-        ...prev,
-        {
-          id: nextMovementId(prev),
-          itemName,
-          type: "Out",
-          quantity: qty,
-          fromLocationId: locationId,
-          toLocationId: null,
-          date,
-          reference: reference.trim() || "—",
-        },
-      ]);
-    } else {
-      if (!fromLocationId || !toLocationId || fromLocationId === toLocationId) return;
+    const applyTransferBetweenLocations = () => {
+      if (!fromLocationId || !toLocationId || fromLocationId === toLocationId) return false;
       const srcRow = stockRows.find((r) => r.itemName === itemName && r.locationId === fromLocationId);
       if (!srcRow) {
         window.alert("No stock for this item at the source location.");
-        return;
+        return false;
       }
       if (srcRow.available < qty) {
         window.alert("Not enough available quantity at the source location.");
-        return;
+        return false;
       }
       setStockRows((prev) => {
         const srcIdx = prev.findIndex((r) => r.itemName === itemName && r.locationId === fromLocationId);
@@ -549,19 +764,79 @@ export function InventoryModule() {
           id: nextMovementId(prev),
           itemName,
           type: "Transfer",
+          transactionType: kind === "receive" ? "Transfer in" : "Internal (movement)",
           quantity: qty,
           fromLocationId,
           toLocationId,
           date,
-          reference: "Transfer",
+          reference: reference.trim() || "Transfer",
         },
       ]);
+      return true;
+    };
+
+    if (kind === "receive") {
+      if (inboundTransactionType === "Transfer in") {
+        const ok = applyTransferBetweenLocations();
+        if (!ok) return;
+      } else {
+        applyReceiveOnly();
+      }
+    } else if (kind === "return") {
+      if (!locationId) return;
+      setMovements((prev) => [
+        ...prev,
+        {
+          id: nextMovementId(prev),
+          itemName,
+          type: "Return",
+          transactionType: "Customer return",
+          quantity: qty,
+          fromLocationId: null,
+          toLocationId: locationId,
+          date,
+          reference: reference.trim() || "—",
+        },
+      ]);
+      setStockNotice(`Return request logged for ${itemName}. Approve it in Returned tab to add stock.`);
+    } else if (kind === "issue") {
+      if (!locationId) return;
+      const row = stockRows.find((r) => r.itemName === itemName && r.locationId === locationId);
+      if (!row) {
+        window.alert("No stock for this item at the selected location.");
+        return;
+      }
+      if (row.available < qty) {
+        window.alert("Not enough available quantity to issue (reserved stock is not usable).");
+        return;
+      }
+      setStockRows((prev) => {
+        const idx = prev.findIndex((r) => r.itemName === itemName && r.locationId === locationId);
+        return prev.map((r, i) => (i === idx ? { ...r, available: r.available - qty } : r));
+      });
+      setMovements((prev) => [
+        ...prev,
+        {
+          id: nextMovementId(prev),
+          itemName,
+          type: "Out",
+          transactionType: outboundTransactionType,
+          quantity: qty,
+          fromLocationId: locationId,
+          toLocationId: null,
+          date,
+          reference: reference.trim() || "—",
+        },
+      ]);
+    } else {
+      const ok = applyTransferBetweenLocations();
+      if (!ok) return;
     }
     setMovementModalOpen(false);
-  }, [movementForm, stockRows]);
+  }, [movementForm, stockRows, inboundTransactionType, outboundTransactionType]);
 
   const nameFieldLabel =
-    addItemForm.category === "Item" ? "Item Name" : addItemForm.category === "Tool" ? "Tool Name" : "Asset Name";
+    addItemForm.category === "Service Item" ? "Service Name" : addItemForm.category === "Asset Item" ? "Asset Name" : "Item Name";
 
   return (
     <div className="space-y-6">
@@ -619,7 +894,7 @@ export function InventoryModule() {
           </section>
 
           <section className="space-y-3">
-            <h3 className="text-sm font-semibold text-foreground">Recent movements</h3>
+            <h3 className="text-sm font-semibold text-foreground">Recent transactions</h3>
             <div className="overflow-x-auto rounded-lg bg-card shadow-sm ring-1 ring-slate-100/80">
               <table className="w-full min-w-[560px] text-left text-xs">
                 <thead>
@@ -648,6 +923,9 @@ export function InventoryModule() {
 
       {tab === "Stock" && (
         <div className="space-y-6">
+          {stockNotice ? (
+            <p className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-900">{stockNotice}</p>
+          ) : null}
           <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
             <div className="flex min-w-0 flex-wrap items-center gap-2">
               <div className="relative w-72 max-w-full shrink-0">
@@ -665,9 +943,10 @@ export function InventoryModule() {
                 onChange={(e) => setStockCategoryFilter(e.target.value)}
               >
                 <option value="All">All categories</option>
-                <option value="Item">Item</option>
-                <option value="Tool">Tool</option>
-                <option value="Asset">Asset</option>
+                <option value="Stock Item">Stock Item</option>
+                <option value="Consumable Item">Consumable Item</option>
+                <option value="Service Item">Service Item</option>
+                <option value="Asset Item">Asset Item</option>
               </select>
               <select
                 className={filterSelect}
@@ -689,9 +968,18 @@ export function InventoryModule() {
               </select>
             </div>
             <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
-              <Button type="button" variant="outline" size="sm" className="h-9" onClick={openMovementModal}>
-                New movement
-              </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button type="button" variant="outline" size="sm" className="h-9">
+                    New transaction
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-48">
+                  <DropdownMenuItem onClick={() => openMovementModal("receive")}>Inbound</DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => openMovementModal("issue")}>Outbound</DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => openMovementModal("transfer")}>Internal (movement)</DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
               <Button
                 type="button"
                 size="sm"
@@ -705,10 +993,32 @@ export function InventoryModule() {
             </div>
           </div>
 
+          {selectedStockIds.length > 0 ? (
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs">
+              <p className="text-muted-foreground">
+                {selectedStockIds.length} selected (items/tools) for batch operations
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <Button type="button" size="sm" variant="outline" className="h-8" onClick={() => openRequestModal(selectedStockIds, "bulk")}>
+                  Bulk request
+                </Button>
+                <Button type="button" size="sm" variant="outline" className="h-8" onClick={() => editStockRows(selectedStockIds)}>
+                  Bulk edit
+                </Button>
+                <Button type="button" size="sm" variant="destructive" className="h-8" onClick={() => deleteStockRows(selectedStockIds)}>
+                  Bulk delete
+                </Button>
+              </div>
+            </div>
+          ) : null}
+
           <div className="overflow-x-auto rounded-lg bg-card shadow-sm ring-1 ring-slate-100/80">
-            <table className="w-full min-w-[900px] text-left text-xs">
+            <table className="w-full min-w-[980px] text-left text-xs">
               <thead>
                 <tr className="text-muted-foreground">
+                  <th className="px-4 py-3 font-medium">
+                    <input type="checkbox" checked={allFilteredSelected} onChange={toggleAllFilteredSelection} aria-label="Select all listed items" />
+                  </th>
                   <th className="px-4 py-3 font-medium">Name</th>
                   <th className="px-4 py-3 font-medium">Category</th>
                   <th className="px-4 py-3 font-medium">Available Quantity</th>
@@ -717,13 +1027,23 @@ export function InventoryModule() {
                   <th className="px-4 py-3 font-medium">Location</th>
                   <th className="px-4 py-3 font-medium">Minimum Level</th>
                   <th className="px-4 py-3 font-medium">Status</th>
+                  <th className="px-4 py-3 font-medium">Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {filteredStock.map((row) => {
                   const st = invStockStatus(row.available, row.minLevel);
+                  const selected = selectedStockIds.includes(row.id);
                   return (
                     <tr key={row.id} className="border-t border-border/60">
+                      <td className="px-4 py-3">
+                        <input
+                          type="checkbox"
+                          checked={selected}
+                          onChange={() => toggleStockSelection(row.id)}
+                          aria-label={`Select ${row.itemName}`}
+                        />
+                      </td>
                       <td className="px-4 py-3 font-medium text-foreground">{row.itemName}</td>
                       <td className="px-4 py-3 text-muted-foreground">{row.category}</td>
                       <td className="px-4 py-3 tabular-nums">{row.available}</td>
@@ -734,6 +1054,20 @@ export function InventoryModule() {
                       <td className="px-4 py-3">
                         <InvStatusBadge value={st} />
                       </td>
+                      <td className="px-4 py-3">
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button type="button" variant="ghost" size="icon-sm" className="h-8 w-8" aria-label="More stock actions">
+                              <MoreVertical className="h-4 w-4" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end" className="w-40">
+                            <DropdownMenuItem onClick={() => openRequestModal([row.id], "single")}>Request</DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => editStockRows([row.id])}>Edit</DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => deleteStockRows([row.id])}>Delete</DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </td>
                     </tr>
                   );
                 })}
@@ -743,11 +1077,11 @@ export function InventoryModule() {
         </div>
       )}
 
-      {tab === "Movements" && (
+      {tab === "Transaction" && (
         <div className="space-y-6">
           <div className="flex flex-wrap items-center gap-2">
             <select className={filterSelect} value={movTypeFilter} onChange={(e) => setMovTypeFilter(e.target.value)}>
-              <option value="All">All movement types</option>
+              <option value="All">All transaction types</option>
               <option value="In">In</option>
               <option value="Out">Out</option>
               <option value="Transfer">Transfer</option>
@@ -782,6 +1116,7 @@ export function InventoryModule() {
                   <th className="px-4 py-3 font-medium">Movement ID</th>
                   <th className="px-4 py-3 font-medium">Item Name</th>
                   <th className="px-4 py-3 font-medium">Movement Type</th>
+                  <th className="px-4 py-3 font-medium">Transaction Type</th>
                   <th className="px-4 py-3 font-medium">Quantity</th>
                   <th className="px-4 py-3 font-medium">From Location</th>
                   <th className="px-4 py-3 font-medium">To Location</th>
@@ -796,12 +1131,164 @@ export function InventoryModule() {
                       <td className="px-4 py-3 font-mono text-[11px] text-foreground">{m.id}</td>
                       <td className="px-4 py-3 font-medium">{m.itemName}</td>
                       <td className="px-4 py-3">{m.type}</td>
+                      <td className="px-4 py-3">{m.transactionType}</td>
                       <td className="px-4 py-3 tabular-nums">{m.quantity}</td>
                       <td className="px-4 py-3 text-muted-foreground">{invLocName(locations, m.fromLocationId)}</td>
                       <td className="px-4 py-3 text-muted-foreground">{invLocName(locations, m.toLocationId)}</td>
                       <td className="px-4 py-3 text-muted-foreground">{m.date}</td>
                     </tr>
                   ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {tab === "Requested" && (
+        <div className="space-y-6">
+          <div className="overflow-x-auto rounded-lg bg-card shadow-sm ring-1 ring-slate-100/80">
+            <table className="w-full min-w-[860px] text-left text-xs">
+              <thead>
+                <tr className="text-muted-foreground">
+                  <th className="px-4 py-3 font-medium">Request Date</th>
+                  <th className="px-4 py-3 font-medium">Mode</th>
+                  <th className="px-4 py-3 font-medium">Item / Tool</th>
+                  <th className="px-4 py-3 font-medium">Quantity</th>
+                  <th className="px-4 py-3 font-medium">Project</th>
+                  <th className="px-4 py-3 font-medium">Department</th>
+                  <th className="px-4 py-3 font-medium">Status</th>
+                  <th className="px-4 py-3 font-medium">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {requestRecords.length === 0 ? (
+                  <tr>
+                    <td className="px-4 py-8 text-center text-muted-foreground" colSpan={8}>
+                      No requested items/tools yet.
+                    </td>
+                  </tr>
+                ) : (
+                  requestRecords.map((row) => (
+                    <tr key={row.id} className="border-t border-border/60">
+                      <td className="px-4 py-3 text-muted-foreground">{row.requestedAt}</td>
+                      <td className="px-4 py-3">{row.mode === "single" ? "Single request" : "Bulk request"}</td>
+                      <td className="px-4 py-3 font-medium text-foreground">{row.itemName}</td>
+                      <td className="px-4 py-3 tabular-nums">{row.quantity} {row.uom}</td>
+                      <td className="px-4 py-3 text-muted-foreground">
+                        {row.projectKey ? (INV_PROJECT_OPTIONS.find((p) => p.value === row.projectKey)?.label ?? row.projectKey) : "No project"}
+                      </td>
+                      <td className="px-4 py-3 text-muted-foreground">
+                        {row.departmentKey ? (INV_DEPT_OPTIONS.find((d) => d.value === row.departmentKey)?.label ?? row.departmentKey) : "No department"}
+                      </td>
+                      <td className="px-4 py-3">
+                        <Badge
+                          className={cn(
+                            "font-normal hover:opacity-100",
+                            row.status === "Approved"
+                              ? "bg-emerald-100 text-emerald-800"
+                              : row.status === "Rejected"
+                                ? "bg-red-100 text-red-800"
+                                : "bg-amber-100 text-amber-800",
+                          )}
+                        >
+                          {row.status}
+                        </Badge>
+                      </td>
+                      <td className="px-4 py-3">
+                        {row.status === "Pending" ? (
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button type="button" variant="ghost" size="icon-sm" className="h-8 w-8" aria-label="Requested item actions">
+                                <MoreVertical className="h-4 w-4" />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end" className="w-36">
+                              <DropdownMenuItem onClick={() => approveRequestRecord(row.id)}>Approve</DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => rejectRequestRecord(row.id)}>Reject</DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        ) : (
+                          <span className="text-muted-foreground">{row.reviewedAt ?? "-"}</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {tab === "Returned" && (
+        <div className="space-y-6">
+          <div className="overflow-x-auto rounded-lg bg-card shadow-sm ring-1 ring-slate-100/80">
+            <table className="w-full min-w-[860px] text-left text-xs">
+              <thead>
+                <tr className="text-muted-foreground">
+                  <th className="px-4 py-3 font-medium">Movement ID</th>
+                  <th className="px-4 py-3 font-medium">Item Name</th>
+                  <th className="px-4 py-3 font-medium">Returned Quantity</th>
+                  <th className="px-4 py-3 font-medium">To Location</th>
+                  <th className="px-4 py-3 font-medium">Date</th>
+                  <th className="px-4 py-3 font-medium">Reference</th>
+                  <th className="px-4 py-3 font-medium">Status</th>
+                  <th className="px-4 py-3 font-medium">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {returnedRows.length === 0 ? (
+                  <tr>
+                    <td className="px-4 py-8 text-center text-muted-foreground" colSpan={8}>
+                      No returned items/tools yet.
+                    </td>
+                  </tr>
+                ) : (
+                  returnedRows.map((row) => {
+                    const review = returnedRowReview(row.id);
+                    return (
+                      <tr key={row.id} className="border-t border-border/60">
+                        <td className="px-4 py-3 font-mono text-[11px] text-foreground">{row.id}</td>
+                        <td className="px-4 py-3 font-medium text-foreground">{row.itemName}</td>
+                        <td className="px-4 py-3 tabular-nums">{row.quantity}</td>
+                        <td className="px-4 py-3 text-muted-foreground">{invLocName(locations, row.toLocationId)}</td>
+                        <td className="px-4 py-3 text-muted-foreground">{row.date}</td>
+                        <td className="px-4 py-3 text-muted-foreground">{row.reference}</td>
+                        <td className="px-4 py-3">
+                          <Badge
+                            className={cn(
+                              "font-normal hover:opacity-100",
+                              review.status === "Approved"
+                                ? "bg-emerald-100 text-emerald-800"
+                                : review.status === "Rejected"
+                                  ? "bg-red-100 text-red-800"
+                                  : "bg-amber-100 text-amber-800",
+                            )}
+                          >
+                            {review.status}
+                          </Badge>
+                        </td>
+                        <td className="px-4 py-3">
+                          {review.status === "Pending" ? (
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <Button type="button" variant="ghost" size="icon-sm" className="h-8 w-8" aria-label="Returned item actions">
+                                  <MoreVertical className="h-4 w-4" />
+                                </Button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end" className="w-36">
+                                <DropdownMenuItem onClick={() => approveReturnRecord(row.id)}>Approve</DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => rejectReturnRecord(row.id)}>Reject</DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                          ) : (
+                            <span className="text-muted-foreground">{review.reviewedAt ?? "-"}</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
               </tbody>
             </table>
           </div>
@@ -830,7 +1317,7 @@ export function InventoryModule() {
               <fieldset className="space-y-2">
                 <legend className="text-xs font-medium text-foreground">Category</legend>
                 <div className="flex flex-wrap gap-4">
-                  {(["Item", "Tool", "Asset"] as const).map((c) => (
+                  {(["Stock Item", "Consumable Item", "Service Item", "Asset Item"] as const).map((c) => (
                     <label key={c} className="flex cursor-pointer items-center gap-2">
                       <input
                         type="radio"
@@ -1097,38 +1584,73 @@ export function InventoryModule() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
           <div className="no-scrollbar max-h-[min(92vh,720px)] w-full max-w-lg overflow-y-auto rounded-xl border bg-card px-6 py-5 text-xs shadow-lg sm:max-w-xl">
             <div className="mb-4 flex items-start justify-between gap-3">
-              <h3 className="text-sm font-semibold">New movement</h3>
+              <h3 className="text-sm font-semibold">New transaction</h3>
               <Button variant="ghost" size="icon-sm" onClick={() => setMovementModalOpen(false)} aria-label="Close">
                 <X className="h-4 w-4" />
               </Button>
             </div>
             <div className="space-y-5">
               <fieldset className="space-y-3">
-                <legend className="text-xs font-medium text-foreground">Movement type</legend>
-                <div className="flex flex-wrap items-center gap-x-5 gap-y-2.5">
-                  {(
-                    [
-                      ["receive", "Receive goods (In)"],
-                      ["issue", "Issue stock (Out)"],
-                      ["transfer", "Transfer stock"],
-                      ["return", "Return to stock"],
-                    ] as const
-                  ).map(([value, label]) => (
-                    <label key={value} className="flex cursor-pointer items-center gap-1.5">
-                      <input
-                        type="radio"
-                        name="inv-movement-kind"
-                        className="accent-primary"
-                        checked={movementForm.kind === value}
-                        onChange={() => setMovementForm((f) => ({ ...f, kind: value }))}
-                      />
-                      <span>{label}</span>
-                    </label>
-                  ))}
-                </div>
+                <legend className="text-xs font-medium text-foreground">Transaction type</legend>
+                {movementForm.kind === "receive" ? (
+                  <select
+                    className={selectClass}
+                    value={inboundTransactionType}
+                    onChange={(e) =>
+                      setInboundTransactionType(
+                        e.target.value as "Purchase receipt (from PO)" | "Production output" | "Customer return" | "Transfer in",
+                      )
+                    }
+                  >
+                    <option value="Purchase receipt (from PO)">Purchase receipt (from PO)</option>
+                    <option value="Production output">Production output</option>
+                    <option value="Customer return">Customer return</option>
+                    <option value="Transfer in">Transfer in</option>
+                  </select>
+                ) : movementForm.kind === "issue" ? (
+                  <select
+                    className={selectClass}
+                    value={outboundTransactionType}
+                    onChange={(e) =>
+                      setOutboundTransactionType(
+                        e.target.value as
+                          | "Sales issue (delivery)"
+                          | "Consumption (project or department use)"
+                          | "Scrap / damage"
+                          | "Transfer out",
+                      )
+                    }
+                  >
+                    <option value="Sales issue (delivery)">Sales issue (delivery)</option>
+                    <option value="Consumption (project or department use)">Consumption (project or department use)</option>
+                    <option value="Scrap / damage">Scrap / damage</option>
+                    <option value="Transfer out">Transfer out</option>
+                  </select>
+                ) : (
+                  <div className="flex flex-wrap items-center gap-x-5 gap-y-2.5">
+                    {(
+                      [
+                        ["receive", "Inbound"],
+                        ["issue", "Outbound"],
+                        ["transfer", "Internal (movement)"],
+                      ] as const
+                    ).map(([value, label]) => (
+                      <label key={value} className="flex cursor-pointer items-center gap-1.5">
+                        <input
+                          type="radio"
+                          name="inv-movement-kind"
+                          className="accent-primary"
+                          checked={movementForm.kind === value}
+                          onChange={() => setMovementForm((f) => ({ ...f, kind: value }))}
+                        />
+                        <span>{label}</span>
+                      </label>
+                    ))}
+                  </div>
+                )}
               </fieldset>
 
-              {(movementForm.kind === "receive" || movementForm.kind === "return" || movementForm.kind === "issue") && (
+              {(movementForm.kind === "receive" || movementForm.kind === "issue") && (
                 <div className="space-y-4 pt-1">
                   <div className="space-y-1">
                     <label className="text-xs font-medium text-muted-foreground">Item</label>
@@ -1178,34 +1700,78 @@ export function InventoryModule() {
                       onChange={(e) => setMovementForm((f) => ({ ...f, date: e.target.value }))}
                     />
                   </div>
-                  {(movementForm.kind === "receive" || movementForm.kind === "return") && (
-                    <>
-                      <div className="space-y-1">
-                        <label className="text-xs font-medium text-muted-foreground">Location</label>
-                        <select
-                          className={selectClass}
-                          value={movementForm.locationId}
-                          onChange={(e) => setMovementForm((f) => ({ ...f, locationId: e.target.value }))}
-                        >
-                          <option value="">Select location</option>
-                          {locations.map((l) => (
-                            <option key={l.id} value={l.id}>
-                              {l.name}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                      <div className="space-y-1">
-                        <label className="text-xs font-medium text-muted-foreground">Reference (optional)</label>
-                        <Input
-                          className="h-9"
-                          placeholder={movementForm.kind === "receive" ? "e.g. PO-1024" : "e.g. RMA-…"}
-                          value={movementForm.reference}
-                          onChange={(e) => setMovementForm((f) => ({ ...f, reference: e.target.value }))}
-                        />
-                      </div>
-                    </>
-                  )}
+                  {movementForm.kind === "receive" ? (
+                    inboundTransactionType === "Transfer in" ? (
+                      <>
+                        <div className="space-y-1">
+                          <label className="text-xs font-medium text-muted-foreground">From warehouse</label>
+                          <select
+                            className={selectClass}
+                            value={movementForm.fromLocationId}
+                            onChange={(e) => setMovementForm((f) => ({ ...f, fromLocationId: e.target.value }))}
+                          >
+                            <option value="">Select source warehouse</option>
+                            {locations.map((l) => (
+                              <option key={l.id} value={l.id}>
+                                {l.name}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-xs font-medium text-muted-foreground">To warehouse</label>
+                          <select
+                            className={selectClass}
+                            value={movementForm.toLocationId}
+                            onChange={(e) => setMovementForm((f) => ({ ...f, toLocationId: e.target.value }))}
+                          >
+                            <option value="">Select destination warehouse</option>
+                            {locations.map((l) => (
+                              <option key={l.id} value={l.id}>
+                                {l.name}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-xs font-medium text-muted-foreground">Reference (optional)</label>
+                          <Input
+                            className="h-9"
+                            placeholder="e.g. Transfer note"
+                            value={movementForm.reference}
+                            onChange={(e) => setMovementForm((f) => ({ ...f, reference: e.target.value }))}
+                          />
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="space-y-1">
+                          <label className="text-xs font-medium text-muted-foreground">Location</label>
+                          <select
+                            className={selectClass}
+                            value={movementForm.locationId}
+                            onChange={(e) => setMovementForm((f) => ({ ...f, locationId: e.target.value }))}
+                          >
+                            <option value="">Select location</option>
+                            {locations.map((l) => (
+                              <option key={l.id} value={l.id}>
+                                {l.name}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-xs font-medium text-muted-foreground">Reference (optional)</label>
+                          <Input
+                            className="h-9"
+                            placeholder="e.g. PO-1024"
+                            value={movementForm.reference}
+                            onChange={(e) => setMovementForm((f) => ({ ...f, reference: e.target.value }))}
+                          />
+                        </div>
+                      </>
+                    )
+                  ) : null}
                   {movementForm.kind === "issue" && (
                     <>
                       <div className="space-y-1">
@@ -1326,6 +1892,107 @@ export function InventoryModule() {
               </Button>
               <Button className="h-9 min-w-24" onClick={submitMovement}>
                 Submit
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {requestModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
+          <div className="no-scrollbar max-h-[min(92vh,720px)] w-full max-w-2xl overflow-y-auto rounded-lg border bg-card p-6 shadow-lg">
+            <div className="mb-4 flex items-start justify-between gap-2">
+              <h3 className="text-sm font-semibold">
+                {requestMode === "single" ? "Single Item/Tool Request" : "Bulk Request for Items/Tools"}
+              </h3>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                onClick={() => {
+                  setRequestError("");
+                  setRequestModalOpen(false);
+                }}
+                aria-label="Close request form"
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+
+            <div className="space-y-5 text-xs">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-muted-foreground">Project (optional)</label>
+                  <select className={selectClass} value={requestProjectKey} onChange={(e) => setRequestProjectKey(e.target.value)}>
+                    <option value="">None</option>
+                    {INV_PROJECT_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-muted-foreground">Department (optional)</label>
+                  <select className={selectClass} value={requestDepartmentKey} onChange={(e) => setRequestDepartmentKey(e.target.value)}>
+                    <option value="">None</option>
+                    {INV_DEPT_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="overflow-hidden rounded-md border border-border">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-muted/60">
+                    <tr>
+                      <th className="px-3 py-2 font-medium">Item / Tool</th>
+                      <th className="px-3 py-2 font-medium">Quantity</th>
+                      <th className="px-3 py-2 font-medium">UoM</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {requestRows.map((row) => (
+                      <tr key={row.id} className="border-t border-border/50">
+                        <td className="px-3 py-2">{row.itemName}</td>
+                        <td className="px-3 py-2">
+                          <Input
+                            className="h-8"
+                            type="number"
+                            min={1}
+                            value={row.quantity}
+                            onChange={(e) =>
+                              setRequestRows((prev) =>
+                                prev.map((r) => (r.id === row.id ? { ...r, quantity: e.target.value } : r)),
+                              )
+                            }
+                          />
+                        </td>
+                        <td className="px-3 py-2">{row.uom}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {requestError ? <p className="text-xs text-red-600">{requestError}</p> : null}
+            </div>
+
+            <div className="mt-6 flex justify-end gap-2 border-t border-border/60 pt-4">
+              <Button
+                variant="outline"
+                className="h-9 min-w-24"
+                onClick={() => {
+                  setRequestError("");
+                  setRequestModalOpen(false);
+                }}
+              >
+                Cancel
+              </Button>
+              <Button className="h-9 min-w-28 text-white hover:opacity-90" style={{ backgroundColor: PRIMARY }} onClick={submitRequest}>
+                Submit Request
               </Button>
             </div>
           </div>
