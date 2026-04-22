@@ -5,8 +5,9 @@ import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import { AlertTriangle, CircleAlert, MoreVertical, Package, Plus, Search, Warehouse, X } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import { AlertTriangle, CircleAlert, MoreVertical, Package, Plus, Search, Settings, Warehouse, X } from "lucide-react";
+import { useCallback, useMemo, useRef, useState } from "react";
+import * as XLSX from "xlsx";
 
 const PRIMARY = "#0D9488";
 
@@ -22,11 +23,13 @@ type InvLocation = {
 };
 
 type InvItemCategory = "Stock Item" | "Consumable Item" | "Service Item" | "Asset Item";
+type InvConditionStatus = "Good" | "Damaged" | "Faulty" | "Under Maintenance" | "Lost" | "Obsolete";
 
 type InvStockRow = {
   id: string;
   itemName: string;
   category: InvItemCategory;
+  conditionStatus: InvConditionStatus;
   available: number;
   reserved: number;
   uom: string;
@@ -50,19 +53,34 @@ type InvMovement = {
 
 type InvMovementUiKind = "receive" | "issue" | "transfer" | "return";
 type InvRequestMode = "single" | "bulk";
-type ReturnReviewStatus = "Pending" | "Approved" | "Rejected";
+type ReturnReviewStatus = "Pending" | "Approved" | "Received" | "Rejected";
 type InvRequestRecord = {
   id: string;
   itemName: string;
+  category: InvItemCategory;
   quantity: number;
   uom: string;
   projectKey: string;
   departmentKey: string;
   mode: InvRequestMode;
   requestedAt: string;
-  status: "Pending" | "Approved" | "Rejected";
+  status: "Pending" | "Approved" | "Delivered" | "Rejected";
   reviewedAt: string | null;
+  deliveredAt: string | null;
 };
+
+type CustomSettingKey =
+  | "itemCategory"
+  | "unitOfMeasurement"
+  | "location"
+  | "store"
+  | "bin"
+  | "availabilityStatus"
+  | "conditionStatus"
+  | "performanceStatus"
+  | "currency";
+
+type CustomSettingOptions = Record<CustomSettingKey, string[]>;
 
 const INV_DEFAULT_MIN = 10;
 
@@ -113,30 +131,38 @@ const filterSelect = "h-9 shrink-0 rounded-md border border-input bg-background 
 function InventoryTabs({
   tab,
   onTab,
+  onOpenSettings,
 }: {
   tab: InventoryTab;
   onTab: (t: InventoryTab) => void;
+  onOpenSettings: () => void;
 }) {
   const items: InventoryTab[] = ["Overview", "Stock", "Transaction", "Requested", "Returned"];
   return (
-    <div className="flex flex-wrap gap-8 border-b border-transparent">
-      {items.map((item) => {
-        const active = tab === item;
-        return (
-          <button
-            key={item}
-            type="button"
-            onClick={() => onTab(item)}
-            className={cn(
-              "-mb-px border-b-2 border-transparent pb-2 text-sm transition-colors",
-              active ? "font-semibold" : "font-normal text-muted-foreground hover:text-foreground",
-            )}
-            style={active ? { color: PRIMARY, borderBottomColor: PRIMARY } : undefined}
-          >
-            {item}
-          </button>
-        );
-      })}
+    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-transparent">
+      <div className="flex flex-wrap gap-8">
+        {items.map((item) => {
+          const active = tab === item;
+          return (
+            <button
+              key={item}
+              type="button"
+              onClick={() => onTab(item)}
+              className={cn(
+                "-mb-px border-b-2 border-transparent pb-2 text-sm transition-colors",
+                active ? "font-semibold" : "font-normal text-muted-foreground hover:text-foreground",
+              )}
+              style={active ? { color: PRIMARY, borderBottomColor: PRIMARY } : undefined}
+            >
+              {item}
+            </button>
+          );
+        })}
+      </div>
+      <Button type="button" variant="outline" size="sm" className="h-8" onClick={onOpenSettings}>
+        <Settings className="mr-1 h-3.5 w-3.5" />
+        Settings
+      </Button>
     </div>
   );
 }
@@ -155,6 +181,7 @@ function SummaryCard({ label, value, icon: Icon }: { label: string; value: strin
 
 export function InventoryModule() {
   const [tab, setTab] = useState<InventoryTab>("Overview");
+  const [settingsModalOpen, setSettingsModalOpen] = useState(false);
 
   const locations = useMemo<InvLocation[]>(
     () => [
@@ -171,6 +198,7 @@ export function InventoryModule() {
       id: "stk-1",
       itemName: "Cast Iron Valve 4\"",
       category: "Stock Item",
+      conditionStatus: "Good",
       available: 220,
       reserved: 40,
       uom: "pcs",
@@ -181,6 +209,7 @@ export function InventoryModule() {
       id: "stk-2",
       itemName: "Stainless Bolts M16",
       category: "Consumable Item",
+      conditionStatus: "Good",
       available: 90,
       reserved: 22,
       uom: "pcs",
@@ -191,6 +220,7 @@ export function InventoryModule() {
       id: "stk-3",
       itemName: "Electrical Cable 3×2.5",
       category: "Stock Item",
+      conditionStatus: "Good",
       available: 0,
       reserved: 0,
       uom: "m",
@@ -201,6 +231,7 @@ export function InventoryModule() {
       id: "stk-4",
       itemName: "Hydraulic Hose Assembly",
       category: "Asset Item",
+      conditionStatus: "Under Maintenance",
       available: 45,
       reserved: 8,
       uom: "pcs",
@@ -311,27 +342,27 @@ export function InventoryModule() {
   const [addItemForm, setAddItemForm] = useState({
     category: "Stock Item" as InvItemCategory,
     name: "",
+    itemNumber: "",
+    type: "Consumable",
     quantity: "",
-    uom: "",
+    uom: "pcs",
+    description: "",
+    store: "",
     locationId: "",
+    status: "Active",
     minLevel: "",
     model: "",
-    itemNumber: "",
     serialNumber: "",
     manufacturer: "",
-    subCategory: "",
-    type: "",
     price: "",
     currency: "USD",
     dateOfPurchase: "",
     warranty: "",
+    conditionStatus: "Good" as InvConditionStatus,
     projectKey: "",
     departmentKey: "",
-    status: "Active",
-    description: "",
   });
-
-  const [addItemProjectError, setAddItemProjectError] = useState("");
+  const [addItemError, setAddItemError] = useState("");
 
   const [stockSearch, setStockSearch] = useState("");
   const [stockCategoryFilter, setStockCategoryFilter] = useState<string>("All");
@@ -339,14 +370,43 @@ export function InventoryModule() {
   const [stockStatusFilter, setStockStatusFilter] = useState("All");
   const [selectedStockIds, setSelectedStockIds] = useState<string[]>([]);
   const [stockNotice, setStockNotice] = useState<string | null>(null);
+  const requestImportInputRef = useRef<HTMLInputElement | null>(null);
   const [requestModalOpen, setRequestModalOpen] = useState(false);
   const [requestMode, setRequestMode] = useState<InvRequestMode>("single");
   const [requestProjectKey, setRequestProjectKey] = useState("");
   const [requestDepartmentKey, setRequestDepartmentKey] = useState("");
-  const [requestRows, setRequestRows] = useState<Array<{ id: string; itemName: string; quantity: string; uom: string }>>([]);
+  const [requestRows, setRequestRows] = useState<Array<{ id: string; itemName: string; category: InvItemCategory; quantity: string; uom: string }>>(
+    [],
+  );
+  const [requestItemPickerOpen, setRequestItemPickerOpen] = useState(false);
+  const [requestItemSearch, setRequestItemSearch] = useState("");
   const [requestError, setRequestError] = useState("");
   const [requestRecords, setRequestRecords] = useState<InvRequestRecord[]>([]);
-  const [returnReviewById, setReturnReviewById] = useState<Record<string, { status: ReturnReviewStatus; reviewedAt: string | null }>>({});
+  const [returnReviewById, setReturnReviewById] = useState<
+    Record<string, { status: ReturnReviewStatus; reviewedAt: string | null; receivedAt: string | null }>
+  >({});
+  const [customSettingOptions, setCustomSettingOptions] = useState<CustomSettingOptions>({
+    itemCategory: ["Stock Item", "Consumable Item", "Service Item", "Asset Item"],
+    unitOfMeasurement: ["pcs", "m", "kg", "l"],
+    location: ["Warehouse", "Site", "Bin"],
+    store: ["Main Store", "Regional Store"],
+    bin: ["A-01", "B-14"],
+    availabilityStatus: ["In Stock", "Low Stock", "Out of Stock"],
+    conditionStatus: ["Good", "Damaged", "Faulty", "Under Maintenance", "Lost", "Obsolete"],
+    performanceStatus: ["Active", "Inactive", "Under Maintenance"],
+    currency: ["USD", "EUR", "ETB"],
+  });
+  const [customSettingInputs, setCustomSettingInputs] = useState<Record<CustomSettingKey, string>>({
+    itemCategory: "",
+    unitOfMeasurement: "",
+    location: "",
+    store: "",
+    bin: "",
+    availabilityStatus: "",
+    conditionStatus: "",
+    performanceStatus: "",
+    currency: "",
+  });
 
   const [movSearch, setMovSearch] = useState("");
   const [movTypeFilter, setMovTypeFilter] = useState("All");
@@ -389,26 +449,27 @@ export function InventoryModule() {
     setAddItemForm({
       category: "Stock Item",
       name: "",
+      itemNumber: "",
+      type: "Consumable",
       quantity: "",
       uom: "pcs",
+      description: "",
+      store: "",
       locationId: locations[0]?.id ?? "",
+      status: "Active",
       minLevel: String(INV_DEFAULT_MIN),
       model: "",
-      itemNumber: "",
       serialNumber: "",
       manufacturer: "",
-      subCategory: "",
-      type: "",
       price: "",
       currency: "USD",
       dateOfPurchase: "",
       warranty: "",
+      conditionStatus: "Good",
       projectKey: "",
       departmentKey: "",
-      status: "Active",
-      description: "",
     });
-    setAddItemProjectError("");
+    setAddItemError("");
     setAddItemModalOpen(true);
   }, [locations]);
 
@@ -436,7 +497,7 @@ export function InventoryModule() {
   }, [movements]);
 
   const returnedRowReview = useCallback(
-    (movementId: string) => returnReviewById[movementId] ?? { status: "Pending" as const, reviewedAt: null },
+    (movementId: string) => returnReviewById[movementId] ?? { status: "Pending" as const, reviewedAt: null, receivedAt: null },
     [returnReviewById],
   );
 
@@ -465,15 +526,34 @@ export function InventoryModule() {
     });
   }, [movements, movSearch, movTypeFilter, movDateFrom, movDateTo, movItemFilter]);
 
+  const requestSelectableItems = useMemo(() => {
+    return [...stockRows]
+      .sort((a, b) => a.itemName.localeCompare(b.itemName))
+      .filter((row) => {
+        const q = requestItemSearch.trim().toLowerCase();
+        if (!q) return true;
+        return (
+          row.itemName.toLowerCase().includes(q) ||
+          row.category.toLowerCase().includes(q) ||
+          row.uom.toLowerCase().includes(q)
+        );
+      });
+  }, [stockRows, requestItemSearch]);
+
   const submitAddItem = useCallback(() => {
-    if (!addItemForm.projectKey.trim()) {
-      setAddItemProjectError("Project is required");
-      return;
-    }
-    setAddItemProjectError("");
+    setAddItemError("");
     const qty = Number(addItemForm.quantity);
     const minL = Number(addItemForm.minLevel) || INV_DEFAULT_MIN;
-    if (!addItemForm.name.trim() || !Number.isFinite(qty) || qty < 0 || !addItemForm.locationId) return;
+    const isBulkItem = Number.isFinite(qty) && qty > 1;
+    const requiresSerial = addItemForm.type === "Tool" || addItemForm.type === "Asset";
+    if (!addItemForm.name.trim() || !Number.isFinite(qty) || qty < 0 || !addItemForm.locationId) {
+      setAddItemError("Please fill required fields: item name, quantity, and location.");
+      return;
+    }
+    if (requiresSerial && !isBulkItem && !addItemForm.serialNumber.trim()) {
+      setAddItemError("Serial Number is required for Tool/Asset when quantity is 1.");
+      return;
+    }
     const id = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `stk-${Date.now()}`;
     setStockRows((prev) => [
       ...prev,
@@ -481,6 +561,7 @@ export function InventoryModule() {
         id,
         itemName: addItemForm.name.trim(),
         category: addItemForm.category,
+        conditionStatus: addItemForm.conditionStatus,
         available: qty,
         reserved: 0,
         uom: addItemForm.uom.trim() || "pcs",
@@ -488,7 +569,7 @@ export function InventoryModule() {
         minLevel: minL,
       },
     ]);
-    setAddItemProjectError("");
+    setAddItemError("");
     setAddItemModalOpen(false);
     setStockNotice(`${addItemForm.category} "${addItemForm.name.trim()}" added successfully.`);
   }, [addItemForm]);
@@ -514,10 +595,13 @@ export function InventoryModule() {
       setRequestProjectKey("");
       setRequestDepartmentKey("");
       setRequestError("");
+      setRequestItemSearch("");
+      setRequestItemPickerOpen(false);
       setRequestRows(
         rows.map((row) => ({
           id: row.id,
           itemName: row.itemName,
+          category: row.category,
           quantity: "1",
           uom: row.uom,
         })),
@@ -527,7 +611,37 @@ export function InventoryModule() {
     [stockRows],
   );
 
+  const addRequestItemRow = useCallback((item: InvStockRow) => {
+    const id = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `req-row-${Date.now()}`;
+    setRequestRows((prev) => [
+      ...prev,
+      {
+        id,
+        itemName: item.itemName,
+        category: item.category,
+        quantity: "1",
+        uom: item.uom,
+      },
+    ]);
+    setRequestItemPickerOpen(false);
+    setRequestItemSearch("");
+    setRequestError("");
+  }, []);
+
+  const removeRequestRow = useCallback((id: string) => {
+    setRequestRows((prev) => prev.filter((row) => row.id !== id));
+  }, []);
+
   const submitRequest = useCallback(() => {
+    if (requestRows.length === 0) {
+      setRequestError("Add at least one item category before submitting.");
+      return;
+    }
+    const validNames = requestRows.every((row) => row.itemName.trim().length > 0);
+    if (!validNames) {
+      setRequestError("Each row must include an item/tool name.");
+      return;
+    }
     const validQty = requestRows.every((row) => Number.isFinite(Number(row.quantity)) && Number(row.quantity) > 0);
     if (!validQty) {
       setRequestError("All quantities must be greater than 0.");
@@ -545,7 +659,8 @@ export function InventoryModule() {
     setRequestRecords((prev) => [
       ...requestRows.map((row) => ({
         id: typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `req-${Date.now()}-${row.id}`,
-        itemName: row.itemName,
+        itemName: row.itemName.trim(),
+        category: row.category,
         quantity: Number(row.quantity),
         uom: row.uom,
         projectKey: requestProjectKey,
@@ -554,6 +669,7 @@ export function InventoryModule() {
         requestedAt: todayStr,
         status: "Pending" as const,
         reviewedAt: null,
+        deliveredAt: null,
       })),
       ...prev,
     ]);
@@ -576,6 +692,31 @@ export function InventoryModule() {
         return;
       }
 
+      setRequestRecords((prev) =>
+        prev.map((row) =>
+          row.id === requestId ? { ...row, status: "Approved", reviewedAt: todayStr, deliveredAt: null } : row,
+        ),
+      );
+      setStockNotice(`${request.itemName} request approved. Awaiting storekeeper delivery confirmation.`);
+    },
+    [requestRecords, stockRows, todayStr],
+  );
+
+  const confirmRequestDelivery = useCallback(
+    (requestId: string) => {
+      const request = requestRecords.find((r) => r.id === requestId);
+      if (!request || request.status !== "Approved") return;
+
+      const totalAvailable = stockRows
+        .filter((row) => row.itemName === request.itemName)
+        .reduce((sum, row) => sum + row.available, 0);
+      if (totalAvailable < request.quantity) {
+        setStockNotice(
+          `Cannot deliver ${request.itemName}. Requested ${request.quantity} ${request.uom}, but only ${totalAvailable} available in stock.`,
+        );
+        return;
+      }
+
       let remaining = request.quantity;
       setStockRows((prev) =>
         prev.map((row) => {
@@ -588,10 +729,10 @@ export function InventoryModule() {
 
       setRequestRecords((prev) =>
         prev.map((row) =>
-          row.id === requestId ? { ...row, status: "Approved", reviewedAt: todayStr } : row,
+          row.id === requestId ? { ...row, status: "Delivered", deliveredAt: todayStr } : row,
         ),
       );
-      setStockNotice(`${request.itemName} request approved and ${request.quantity} ${request.uom} deducted from stock.`);
+      setStockNotice(`${request.itemName} delivery confirmed and ${request.quantity} ${request.uom} deducted from stock.`);
     },
     [requestRecords, stockRows, todayStr],
   );
@@ -601,7 +742,7 @@ export function InventoryModule() {
       setRequestRecords((prev) =>
         prev.map((row) =>
           row.id === requestId && row.status === "Pending"
-            ? { ...row, status: "Rejected", reviewedAt: todayStr }
+            ? { ...row, status: "Rejected", reviewedAt: todayStr, deliveredAt: null }
             : row,
         ),
       );
@@ -615,8 +756,23 @@ export function InventoryModule() {
       const movement = movements.find((m) => m.id === movementId && m.type === "Return");
       if (!movement) return;
       if ((returnReviewById[movementId]?.status ?? "Pending") !== "Pending") return;
+
+      setReturnReviewById((prev) => ({
+        ...prev,
+        [movementId]: { status: "Approved", reviewedAt: todayStr, receivedAt: null },
+      }));
+      setStockNotice(`Return ${movement.id} approved. Awaiting storekeeper receipt confirmation.`);
+    },
+    [movements, returnReviewById, todayStr],
+  );
+
+  const confirmReturnReceipt = useCallback(
+    (movementId: string) => {
+      const movement = movements.find((m) => m.id === movementId && m.type === "Return");
+      if (!movement) return;
+      if ((returnReviewById[movementId]?.status ?? "Pending") !== "Approved") return;
       if (!movement.toLocationId) {
-        setStockNotice(`Cannot approve return ${movement.id} because destination location is missing.`);
+        setStockNotice(`Cannot confirm receipt for ${movement.id} because destination location is missing.`);
         return;
       }
 
@@ -632,6 +788,7 @@ export function InventoryModule() {
             id: typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `stk-${Date.now()}`,
             itemName: movement.itemName,
             category: template?.category ?? "Stock Item",
+            conditionStatus: template?.conditionStatus ?? "Good",
             available: movement.quantity,
             reserved: 0,
             uom: template?.uom ?? "pcs",
@@ -643,9 +800,13 @@ export function InventoryModule() {
 
       setReturnReviewById((prev) => ({
         ...prev,
-        [movementId]: { status: "Approved", reviewedAt: todayStr },
+        [movementId]: {
+          status: "Received",
+          reviewedAt: prev[movementId]?.reviewedAt ?? todayStr,
+          receivedAt: todayStr,
+        },
       }));
-      setStockNotice(`Return ${movement.id} approved. ${movement.quantity} added back to stock.`);
+      setStockNotice(`Receipt confirmed for ${movement.id}. ${movement.quantity} added back to stock.`);
     },
     [movements, returnReviewById, todayStr],
   );
@@ -655,7 +816,7 @@ export function InventoryModule() {
       if ((returnReviewById[movementId]?.status ?? "Pending") !== "Pending") return;
       setReturnReviewById((prev) => ({
         ...prev,
-        [movementId]: { status: "Rejected", reviewedAt: todayStr },
+        [movementId]: { status: "Rejected", reviewedAt: todayStr, receivedAt: null },
       }));
       setStockNotice(`Return request ${movementId} rejected.`);
     },
@@ -685,6 +846,112 @@ export function InventoryModule() {
     setStockNotice(`Deleted ${ids.length} item/tool record(s) in one operation.`);
   }, []);
 
+  const addCustomSettingOption = useCallback(
+    (key: CustomSettingKey) => {
+      const value = customSettingInputs[key].trim();
+      if (!value) return;
+      setCustomSettingOptions((prev) => {
+        const exists = prev[key].some((item) => item.toLowerCase() === value.toLowerCase());
+        if (exists) return prev;
+        return { ...prev, [key]: [...prev[key], value] };
+      });
+      setCustomSettingInputs((prev) => ({ ...prev, [key]: "" }));
+      setStockNotice(`Added "${value}" to ${key}.`);
+    },
+    [customSettingInputs],
+  );
+
+  const removeCustomSettingOption = useCallback((key: CustomSettingKey, value: string) => {
+    setCustomSettingOptions((prev) => ({ ...prev, [key]: prev[key].filter((item) => item !== value) }));
+  }, []);
+
+  const exportStockTemplate = useCallback(() => {
+    const rows = stockRows.map((row) => ({
+      "Item / Tool name": row.itemName,
+      Category: row.category,
+      Quantity: row.available,
+      UoM: row.uom,
+    }));
+    const sheet = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, sheet, "Items");
+    XLSX.writeFile(wb, "stock-items-template.xlsx");
+    setStockNotice("Stock template exported successfully.");
+  }, [stockRows]);
+
+  const importBulkRequestFile = useCallback(
+    async (file: File) => {
+      try {
+        const buffer = await file.arrayBuffer();
+        const wb = XLSX.read(buffer, { type: "array" });
+        const firstSheet = wb.SheetNames[0];
+        if (!firstSheet) {
+          setStockNotice("Import failed: workbook has no sheets.");
+          return;
+        }
+        const sheet = wb.Sheets[firstSheet];
+        const rawRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" });
+        const normalized = rawRows
+          .map((r) => {
+            const itemName = String(r["Item / Tool name"] ?? r["Item Name"] ?? r["itemName"] ?? "").trim();
+            const category = String(r["Category"] ?? r["category"] ?? "").trim() as InvItemCategory | "";
+            const quantityRaw = String(r["Quantity"] ?? r["quantity"] ?? "").trim();
+            const uom = String(r["UoM"] ?? r["UOM"] ?? r["uom"] ?? "").trim();
+            return { itemName, category, quantityRaw, uom };
+          })
+          .filter((r) => r.itemName.length > 0);
+
+        if (normalized.length === 0) {
+          setStockNotice("Import failed: no valid rows were found.");
+          return;
+        }
+
+        const importedRows = normalized
+          .map((row, idx) => {
+            const matched =
+              stockRows.find(
+                (s) =>
+                  s.itemName.toLowerCase() === row.itemName.toLowerCase() &&
+                  (!row.category || s.category.toLowerCase() === row.category.toLowerCase()),
+              ) ?? stockRows.find((s) => s.itemName.toLowerCase() === row.itemName.toLowerCase());
+
+            if (!matched) return null;
+
+            const id =
+              typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `req-import-${Date.now()}-${idx}`;
+            const parsedQty = Number(row.quantityRaw);
+            const quantity = Number.isFinite(parsedQty) && parsedQty > 0 ? String(parsedQty) : "1";
+            return {
+              id,
+              itemName: matched.itemName,
+              category: matched.category,
+              quantity,
+              uom: row.uom || matched.uom,
+            };
+          })
+          .filter((row): row is { id: string; itemName: string; category: InvItemCategory; quantity: string; uom: string } => row !== null);
+
+        if (importedRows.length === 0) {
+          setStockNotice("Import failed: no rows matched existing stock items.");
+          return;
+        }
+
+        setRequestMode("bulk");
+        setRequestProjectKey("");
+        setRequestDepartmentKey("");
+        setRequestError("");
+        setRequestItemSearch("");
+        setRequestItemPickerOpen(false);
+        setRequestRows(importedRows);
+        setRequestModalOpen(true);
+        setStockNotice(`Imported ${importedRows.length} item(s) into bulk request form.`);
+      } catch {
+        setStockNotice("Import failed: unsupported or invalid file format.");
+      }
+    },
+    [stockRows],
+  );
+
   const submitMovement = useCallback(() => {
     const { kind, itemName, quantity, locationId, fromLocationId, toLocationId, reference, date, uom } = movementForm;
     const qty = Number(quantity);
@@ -703,7 +970,10 @@ export function InventoryModule() {
         const cat = template?.category ?? "Stock Item";
         const id =
           typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `stk-${String(prev.length)}`;
-        return [...prev, { id, itemName, category: cat, available: qty, reserved: 0, uom: u, locationId, minLevel }];
+        return [
+          ...prev,
+          { id, itemName, category: cat, conditionStatus: template?.conditionStatus ?? "Good", available: qty, reserved: 0, uom: u, locationId, minLevel },
+        ];
       });
       setMovements((prev) => [
         ...prev,
@@ -748,6 +1018,7 @@ export function InventoryModule() {
               id,
               itemName,
               category: src.category,
+              conditionStatus: src.conditionStatus,
               available: qty,
               reserved: 0,
               uom: src.uom,
@@ -835,12 +1106,25 @@ export function InventoryModule() {
     setMovementModalOpen(false);
   }, [movementForm, stockRows, inboundTransactionType, outboundTransactionType]);
 
-  const nameFieldLabel =
-    addItemForm.category === "Service Item" ? "Service Name" : addItemForm.category === "Asset Item" ? "Asset Name" : "Item Name";
+  const addItemQty = Number(addItemForm.quantity);
+  const isConsumableType = addItemForm.type === "Consumable";
+  const isToolOrAssetType = addItemForm.type === "Tool" || addItemForm.type === "Asset";
+  const disableSerialTracking = Number.isFinite(addItemQty) && addItemQty > 1;
+  const customSettingFields: Array<{ key: CustomSettingKey; label: string }> = [
+    { key: "itemCategory", label: "Item category" },
+    { key: "unitOfMeasurement", label: "Unit of measurement" },
+    { key: "location", label: "Location" },
+    { key: "store", label: "Store" },
+    { key: "bin", label: "Bin" },
+    { key: "availabilityStatus", label: "Availability status" },
+    { key: "conditionStatus", label: "Condition status" },
+    { key: "performanceStatus", label: "Performance status" },
+    { key: "currency", label: "Currency" },
+  ];
 
   return (
     <div className="space-y-6">
-      <InventoryTabs tab={tab} onTab={setTab} />
+      <InventoryTabs tab={tab} onTab={setTab} onOpenSettings={() => setSettingsModalOpen(true)} />
 
       {tab === "Overview" && (
         <div className="space-y-8">
@@ -1026,7 +1310,8 @@ export function InventoryModule() {
                   <th className="px-4 py-3 font-medium">Unit of Measurement</th>
                   <th className="px-4 py-3 font-medium">Location</th>
                   <th className="px-4 py-3 font-medium">Minimum Level</th>
-                  <th className="px-4 py-3 font-medium">Status</th>
+                  <th className="px-4 py-3 font-medium">Availability status</th>
+                  <th className="px-4 py-3 font-medium">Condition status</th>
                   <th className="px-4 py-3 font-medium">Actions</th>
                 </tr>
               </thead>
@@ -1054,6 +1339,7 @@ export function InventoryModule() {
                       <td className="px-4 py-3">
                         <InvStatusBadge value={st} />
                       </td>
+                      <td className="px-4 py-3">{row.conditionStatus}</td>
                       <td className="px-4 py-3">
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
@@ -1062,6 +1348,7 @@ export function InventoryModule() {
                             </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end" className="w-40">
+                            <DropdownMenuItem onClick={exportStockTemplate}>Import Template</DropdownMenuItem>
                             <DropdownMenuItem onClick={() => openRequestModal([row.id], "single")}>Request</DropdownMenuItem>
                             <DropdownMenuItem onClick={() => editStockRows([row.id])}>Edit</DropdownMenuItem>
                             <DropdownMenuItem onClick={() => deleteStockRows([row.id])}>Delete</DropdownMenuItem>
@@ -1172,7 +1459,7 @@ export function InventoryModule() {
                     <tr key={row.id} className="border-t border-border/60">
                       <td className="px-4 py-3 text-muted-foreground">{row.requestedAt}</td>
                       <td className="px-4 py-3">{row.mode === "single" ? "Single request" : "Bulk request"}</td>
-                      <td className="px-4 py-3 font-medium text-foreground">{row.itemName}</td>
+                      <td className="px-4 py-3 font-medium text-foreground">{row.itemName} ({row.category})</td>
                       <td className="px-4 py-3 tabular-nums">{row.quantity} {row.uom}</td>
                       <td className="px-4 py-3 text-muted-foreground">
                         {row.projectKey ? (INV_PROJECT_OPTIONS.find((p) => p.value === row.projectKey)?.label ?? row.projectKey) : "No project"}
@@ -1184,8 +1471,10 @@ export function InventoryModule() {
                         <Badge
                           className={cn(
                             "font-normal hover:opacity-100",
-                            row.status === "Approved"
+                            row.status === "Delivered"
                               ? "bg-emerald-100 text-emerald-800"
+                              : row.status === "Approved"
+                                ? "bg-blue-100 text-blue-800"
                               : row.status === "Rejected"
                                 ? "bg-red-100 text-red-800"
                                 : "bg-amber-100 text-amber-800",
@@ -1207,8 +1496,12 @@ export function InventoryModule() {
                               <DropdownMenuItem onClick={() => rejectRequestRecord(row.id)}>Reject</DropdownMenuItem>
                             </DropdownMenuContent>
                           </DropdownMenu>
+                        ) : row.status === "Approved" ? (
+                          <Button type="button" size="sm" className="h-8" onClick={() => confirmRequestDelivery(row.id)}>
+                            Confirm delivered
+                          </Button>
                         ) : (
-                          <span className="text-muted-foreground">{row.reviewedAt ?? "-"}</span>
+                          <span className="text-muted-foreground">{row.deliveredAt ?? row.reviewedAt ?? "-"}</span>
                         )}
                       </td>
                     </tr>
@@ -1258,8 +1551,10 @@ export function InventoryModule() {
                           <Badge
                             className={cn(
                               "font-normal hover:opacity-100",
-                              review.status === "Approved"
+                            review.status === "Received"
                                 ? "bg-emerald-100 text-emerald-800"
+                              : review.status === "Approved"
+                                ? "bg-blue-100 text-blue-800"
                                 : review.status === "Rejected"
                                   ? "bg-red-100 text-red-800"
                                   : "bg-amber-100 text-amber-800",
@@ -1281,8 +1576,12 @@ export function InventoryModule() {
                                 <DropdownMenuItem onClick={() => rejectReturnRecord(row.id)}>Reject</DropdownMenuItem>
                               </DropdownMenuContent>
                             </DropdownMenu>
+                          ) : review.status === "Approved" ? (
+                            <Button type="button" size="sm" className="h-8" onClick={() => confirmReturnReceipt(row.id)}>
+                              Confirm receipt
+                            </Button>
                           ) : (
-                            <span className="text-muted-foreground">{review.reviewedAt ?? "-"}</span>
+                            <span className="text-muted-foreground">{review.receivedAt ?? review.reviewedAt ?? "-"}</span>
                           )}
                         </td>
                       </tr>
@@ -1291,6 +1590,55 @@ export function InventoryModule() {
                 )}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+
+      {settingsModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
+          <div className="no-scrollbar max-h-[min(92vh,760px)] w-full max-w-4xl overflow-y-auto rounded-lg border bg-card p-6 shadow-lg">
+            <div className="mb-4 flex items-start justify-between gap-2">
+              <h3 className="text-sm font-semibold">Custom settings</h3>
+              <Button variant="ghost" size="icon-sm" onClick={() => setSettingsModalOpen(false)} aria-label="Close settings form">
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2">
+              {customSettingFields.map((field) => (
+                <div key={field.key} className="space-y-2 rounded-md border border-border p-3">
+                  <label className="text-xs font-semibold text-foreground">{field.label}</label>
+                  <div className="flex gap-2">
+                    <Input
+                      className="h-8"
+                      value={customSettingInputs[field.key]}
+                      placeholder={`Add ${field.label.toLowerCase()}`}
+                      onChange={(e) => setCustomSettingInputs((prev) => ({ ...prev, [field.key]: e.target.value }))}
+                    />
+                    <Button type="button" size="sm" className="h-8" onClick={() => addCustomSettingOption(field.key)}>
+                      Add
+                    </Button>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {customSettingOptions[field.key].map((value) => (
+                      <button
+                        key={value}
+                        type="button"
+                        className="rounded-full border border-border px-2 py-1 text-[11px] text-muted-foreground hover:bg-muted"
+                        onClick={() => removeCustomSettingOption(field.key, value)}
+                        title="Click to remove"
+                      >
+                        {value}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="mt-5 flex justify-end border-t border-border/60 pt-4">
+              <Button type="button" className="h-9 min-w-24" onClick={() => setSettingsModalOpen(false)}>
+                Done
+              </Button>
+            </div>
           </div>
         </div>
       )}
@@ -1304,7 +1652,7 @@ export function InventoryModule() {
                 variant="ghost"
                 size="icon-sm"
                 onClick={() => {
-                  setAddItemProjectError("");
+                  setAddItemError("");
                   setAddItemModalOpen(false);
                 }}
                 aria-label="Close"
@@ -1314,34 +1662,82 @@ export function InventoryModule() {
             </div>
 
             <div className="space-y-6 text-xs">
-              <fieldset className="space-y-2">
-                <legend className="text-xs font-medium text-foreground">Category</legend>
-                <div className="flex flex-wrap gap-4">
-                  {(["Stock Item", "Consumable Item", "Service Item", "Asset Item"] as const).map((c) => (
-                    <label key={c} className="flex cursor-pointer items-center gap-2">
-                      <input
-                        type="radio"
-                        name="inv-add-category"
-                        className="accent-primary"
-                        checked={addItemForm.category === c}
-                        onChange={() => setAddItemForm((f) => ({ ...f, category: c }))}
-                      />
-                      <span>{c}</span>
-                    </label>
-                  ))}
-                </div>
-              </fieldset>
-
               <div className="space-y-4">
-                <p className="text-xs font-semibold text-foreground">Basic information</p>
+                <p className="text-xs font-semibold text-foreground">Item Master</p>
                 <div className="grid gap-3 sm:grid-cols-2">
-                  <div className="space-y-1 sm:col-span-2">
-                    <label className="text-xs font-medium text-muted-foreground">{nameFieldLabel}</label>
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium text-muted-foreground">Item Name</label>
+                    <Input className="h-9" value={addItemForm.name} onChange={(e) => setAddItemForm((f) => ({ ...f, name: e.target.value }))} />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium text-muted-foreground">Item Number</label>
                     <Input
                       className="h-9"
-                      value={addItemForm.name}
-                      onChange={(e) => setAddItemForm((f) => ({ ...f, name: e.target.value }))}
+                      value={addItemForm.itemNumber}
+                      onChange={(e) => setAddItemForm((f) => ({ ...f, itemNumber: e.target.value }))}
                     />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium text-muted-foreground">Type</label>
+                    <select className={selectClass} value={addItemForm.type} onChange={(e) => setAddItemForm((f) => ({ ...f, type: e.target.value }))}>
+                      <option value="Consumable">Consumable</option>
+                      <option value="Tool">Tool</option>
+                      <option value="Asset">Asset</option>
+                      <option value="Service">Service</option>
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium text-muted-foreground">Category</label>
+                    <select
+                      className={selectClass}
+                      value={addItemForm.category}
+                      onChange={(e) => setAddItemForm((f) => ({ ...f, category: e.target.value as InvItemCategory }))}
+                    >
+                      {customSettingOptions.itemCategory.map((value) => (
+                        <option key={value} value={value}>
+                          {value}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium text-muted-foreground">UOM</label>
+                    <select className={selectClass} value={addItemForm.uom} onChange={(e) => setAddItemForm((f) => ({ ...f, uom: e.target.value }))}>
+                      {customSettingOptions.unitOfMeasurement.map((value) => (
+                        <option key={value} value={value}>
+                          {value}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="space-y-1 sm:col-span-2">
+                    <label className="text-xs font-medium text-muted-foreground">Description</label>
+                    <textarea
+                      className="min-h-[72px] w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-xs outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30"
+                      value={addItemForm.description}
+                      onChange={(e) => setAddItemForm((f) => ({ ...f, description: e.target.value }))}
+                    />
+                  </div>
+                  <div className="space-y-1 sm:col-span-2">
+                    <label className="text-xs font-medium text-muted-foreground">Image</label>
+                    <Input className="h-9 cursor-pointer text-xs file:mr-2" type="file" accept="image/*" />
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <p className="text-xs font-semibold text-foreground">Inventory Info</p>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium text-muted-foreground">Store</label>
+                    <select className={selectClass} value={addItemForm.store} onChange={(e) => setAddItemForm((f) => ({ ...f, store: e.target.value }))}>
+                      <option value="">Select store</option>
+                      {customSettingOptions.store.map((value) => (
+                        <option key={value} value={value}>
+                          {value}
+                        </option>
+                      ))}
+                    </select>
                   </div>
                   <div className="space-y-1">
                     <label className="text-xs font-medium text-muted-foreground">Quantity</label>
@@ -1351,14 +1747,6 @@ export function InventoryModule() {
                       min={0}
                       value={addItemForm.quantity}
                       onChange={(e) => setAddItemForm((f) => ({ ...f, quantity: e.target.value }))}
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-xs font-medium text-muted-foreground">Unit of measurement</label>
-                    <Input
-                      className="h-9"
-                      value={addItemForm.uom}
-                      onChange={(e) => setAddItemForm((f) => ({ ...f, uom: e.target.value }))}
                     />
                   </div>
                   <div className="space-y-1">
@@ -1377,66 +1765,75 @@ export function InventoryModule() {
                     </select>
                   </div>
                   <div className="space-y-1">
-                    <label className="text-xs font-medium text-muted-foreground">Minimum level</label>
-                    <Input
-                      className="h-9"
-                      type="number"
-                      min={0}
-                      value={addItemForm.minLevel}
-                      onChange={(e) => setAddItemForm((f) => ({ ...f, minLevel: e.target.value }))}
-                    />
+                    <label className="text-xs font-medium text-muted-foreground">Status</label>
+                    <select className={selectClass} value={addItemForm.status} onChange={(e) => setAddItemForm((f) => ({ ...f, status: e.target.value }))}>
+                      {customSettingOptions.performanceStatus.map((value) => (
+                        <option key={value} value={value}>
+                          {value}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="space-y-1 sm:col-span-2">
+                    <label className="text-xs font-medium text-muted-foreground">Condition Status</label>
+                    <select
+                      className={selectClass}
+                      value={addItemForm.conditionStatus}
+                      onChange={(e) => setAddItemForm((f) => ({ ...f, conditionStatus: e.target.value as InvConditionStatus }))}
+                    >
+                      <option value="Good">Good</option>
+                      <option value="Damaged">Damaged</option>
+                      <option value="Faulty">Faulty</option>
+                      <option value="Under Maintenance">Under Maintenance</option>
+                      <option value="Lost">Lost</option>
+                      <option value="Obsolete">Obsolete</option>
+                    </select>
                   </div>
                 </div>
               </div>
 
-              <div className="space-y-4">
-                <p className="text-xs font-semibold text-foreground">Details</p>
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <div className="space-y-1">
-                    <label className="text-xs font-medium text-muted-foreground">Model</label>
-                    <Input className="h-9" value={addItemForm.model} onChange={(e) => setAddItemForm((f) => ({ ...f, model: e.target.value }))} />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-xs font-medium text-muted-foreground">Item number</label>
-                    <Input
-                      className="h-9"
-                      value={addItemForm.itemNumber}
-                      onChange={(e) => setAddItemForm((f) => ({ ...f, itemNumber: e.target.value }))}
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-xs font-medium text-muted-foreground">Serial number</label>
-                    <Input
-                      className="h-9"
-                      value={addItemForm.serialNumber}
-                      onChange={(e) => setAddItemForm((f) => ({ ...f, serialNumber: e.target.value }))}
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-xs font-medium text-muted-foreground">Manufacturer</label>
-                    <Input
-                      className="h-9"
-                      value={addItemForm.manufacturer}
-                      onChange={(e) => setAddItemForm((f) => ({ ...f, manufacturer: e.target.value }))}
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-xs font-medium text-muted-foreground">Sub category</label>
-                    <Input
-                      className="h-9"
-                      value={addItemForm.subCategory}
-                      onChange={(e) => setAddItemForm((f) => ({ ...f, subCategory: e.target.value }))}
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-xs font-medium text-muted-foreground">Type</label>
-                    <Input className="h-9" value={addItemForm.type} onChange={(e) => setAddItemForm((f) => ({ ...f, type: e.target.value }))} />
+              {!isConsumableType ? (
+                <div className="space-y-4">
+                  <p className="text-xs font-semibold text-foreground">Asset/Tool Details</p>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="space-y-1">
+                      <label className="text-xs font-medium text-muted-foreground">Model</label>
+                      <Input className="h-9" value={addItemForm.model} onChange={(e) => setAddItemForm((f) => ({ ...f, model: e.target.value }))} />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-xs font-medium text-muted-foreground">
+                        Serial Number {isToolOrAssetType && !disableSerialTracking ? <span className="text-red-600">*</span> : null}
+                      </label>
+                      <Input
+                        className="h-9"
+                        value={disableSerialTracking ? "" : addItemForm.serialNumber}
+                        disabled={disableSerialTracking}
+                        placeholder={disableSerialTracking ? "Disabled for bulk items" : "Enter serial number"}
+                        onChange={(e) => setAddItemForm((f) => ({ ...f, serialNumber: e.target.value }))}
+                      />
+                    </div>
+                    <div className="space-y-1 sm:col-span-2">
+                      <label className="text-xs font-medium text-muted-foreground">Manufacturer</label>
+                      <Input
+                        className="h-9"
+                        value={addItemForm.manufacturer}
+                        onChange={(e) => setAddItemForm((f) => ({ ...f, manufacturer: e.target.value }))}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-xs font-medium text-muted-foreground">Warranty</label>
+                      <Input className="h-9" value={addItemForm.warranty} onChange={(e) => setAddItemForm((f) => ({ ...f, warranty: e.target.value }))} />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-xs font-medium text-muted-foreground">Warranty Document</label>
+                      <Input className="h-9 cursor-pointer text-xs file:mr-2" type="file" />
+                    </div>
                   </div>
                 </div>
-              </div>
+              ) : null}
 
               <div className="space-y-4">
-                <p className="text-xs font-semibold text-foreground">Financial & purchase info</p>
+                <p className="text-xs font-semibold text-foreground">Procurement Info</p>
                 <div className="grid gap-3 sm:grid-cols-2">
                   <div className="space-y-1">
                     <label className="text-xs font-medium text-muted-foreground">Price</label>
@@ -1444,14 +1841,20 @@ export function InventoryModule() {
                   </div>
                   <div className="space-y-1">
                     <label className="text-xs font-medium text-muted-foreground">Currency</label>
-                    <Input
-                      className="h-9"
+                    <select
+                      className={selectClass}
                       value={addItemForm.currency}
                       onChange={(e) => setAddItemForm((f) => ({ ...f, currency: e.target.value }))}
-                    />
+                    >
+                      {customSettingOptions.currency.map((value) => (
+                        <option key={value} value={value}>
+                          {value}
+                        </option>
+                      ))}
+                    </select>
                   </div>
                   <div className="space-y-1">
-                    <label className="text-xs font-medium text-muted-foreground">Date of purchase</label>
+                    <label className="text-xs font-medium text-muted-foreground">Date of Purchase</label>
                     <Input
                       className="h-9"
                       type="date"
@@ -1460,19 +1863,7 @@ export function InventoryModule() {
                     />
                   </div>
                   <div className="space-y-1">
-                    <label className="text-xs font-medium text-muted-foreground">Warranty</label>
-                    <Input
-                      className="h-9"
-                      value={addItemForm.warranty}
-                      onChange={(e) => setAddItemForm((f) => ({ ...f, warranty: e.target.value }))}
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-xs font-medium text-muted-foreground">Warranty document</label>
-                    <Input className="h-9 cursor-pointer text-xs file:mr-2" type="file" />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-xs font-medium text-muted-foreground">PI document</label>
+                    <label className="text-xs font-medium text-muted-foreground">PI Document</label>
                     <Input className="h-9 cursor-pointer text-xs file:mr-2" type="file" />
                   </div>
                 </div>
@@ -1480,42 +1871,10 @@ export function InventoryModule() {
 
               <div className="space-y-4">
                 <p className="text-xs font-semibold text-foreground">Assignment</p>
-                <div className="grid gap-3 sm:grid-cols-2 sm:items-start">
+                <div className="grid gap-3 sm:grid-cols-2">
                   <div className="space-y-1">
-                    <label className="text-xs font-medium text-muted-foreground" htmlFor="inv-add-project">
-                      Project <span className="text-red-600">*</span>
-                    </label>
+                    <label className="text-xs font-medium text-muted-foreground">Department</label>
                     <select
-                      id="inv-add-project"
-                      className={cn(selectClass, addItemProjectError && "border-red-500 focus-visible:ring-red-200")}
-                      value={addItemForm.projectKey}
-                      onChange={(e) => {
-                        setAddItemProjectError("");
-                        setAddItemForm((f) => ({ ...f, projectKey: e.target.value }));
-                      }}
-                      aria-invalid={!!addItemProjectError}
-                      aria-describedby={addItemProjectError ? "inv-add-project-error" : undefined}
-                      required
-                    >
-                      <option value="">Select project</option>
-                      {INV_PROJECT_OPTIONS.map((o) => (
-                        <option key={o.value} value={o.value}>
-                          {o.label}
-                        </option>
-                      ))}
-                    </select>
-                    {addItemProjectError ? (
-                      <p id="inv-add-project-error" className="text-[11px] text-red-600">
-                        {addItemProjectError}
-                      </p>
-                    ) : null}
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-xs font-medium text-muted-foreground" htmlFor="inv-add-department">
-                      Department <span className="font-normal text-muted-foreground">(optional)</span>
-                    </label>
-                    <select
-                      id="inv-add-department"
                       className={selectClass}
                       value={addItemForm.departmentKey}
                       onChange={(e) => setAddItemForm((f) => ({ ...f, departmentKey: e.target.value }))}
@@ -1528,37 +1887,27 @@ export function InventoryModule() {
                       ))}
                     </select>
                   </div>
-                </div>
-              </div>
-
-              <div className="space-y-4">
-                <p className="text-xs font-semibold text-foreground">Additional</p>
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <div className="space-y-1 sm:col-span-2">
-                    <label className="text-xs font-medium text-muted-foreground">Status</label>
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium text-muted-foreground">Project</label>
                     <select
                       className={selectClass}
-                      value={addItemForm.status}
-                      onChange={(e) => setAddItemForm((f) => ({ ...f, status: e.target.value }))}
+                      value={addItemForm.projectKey}
+                      onChange={(e) => setAddItemForm((f) => ({ ...f, projectKey: e.target.value }))}
                     >
-                      <option value="Active">Active</option>
-                      <option value="Inactive">Inactive</option>
+                      <option value="">None</option>
+                      {INV_PROJECT_OPTIONS.map((o) => (
+                        <option key={o.value} value={o.value}>
+                          {o.label}
+                        </option>
+                      ))}
                     </select>
-                  </div>
-                  <div className="space-y-1 sm:col-span-2">
-                    <label className="text-xs font-medium text-muted-foreground">Description</label>
-                    <textarea
-                      className="min-h-[72px] w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-xs outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30"
-                      value={addItemForm.description}
-                      onChange={(e) => setAddItemForm((f) => ({ ...f, description: e.target.value }))}
-                    />
-                  </div>
-                  <div className="space-y-1 sm:col-span-2">
-                    <label className="text-xs font-medium text-muted-foreground">Image upload</label>
-                    <Input className="h-9 cursor-pointer text-xs file:mr-2" type="file" accept="image/*" />
                   </div>
                 </div>
               </div>
+              {disableSerialTracking && isToolOrAssetType ? (
+                <p className="text-[11px] text-amber-700">Serial tracking is disabled for bulk items (quantity greater than 1).</p>
+              ) : null}
+              {addItemError ? <p className="text-xs text-red-600">{addItemError}</p> : null}
             </div>
 
             <div className="mt-6 flex justify-end gap-2 border-t border-border/60 pt-4">
@@ -1566,7 +1915,7 @@ export function InventoryModule() {
                 variant="outline"
                 className="h-9 min-w-24"
                 onClick={() => {
-                  setAddItemProjectError("");
+                  setAddItemError("");
                   setAddItemModalOpen(false);
                 }}
               >
@@ -1948,15 +2297,18 @@ export function InventoryModule() {
                 <table className="w-full text-left text-xs">
                   <thead className="bg-muted/60">
                     <tr>
-                      <th className="px-3 py-2 font-medium">Item / Tool</th>
+                      <th className="px-3 py-2 font-medium">Item / Tool name</th>
+                      <th className="px-3 py-2 font-medium">Category</th>
                       <th className="px-3 py-2 font-medium">Quantity</th>
                       <th className="px-3 py-2 font-medium">UoM</th>
+                      <th className="px-3 py-2 font-medium text-right">Action</th>
                     </tr>
                   </thead>
                   <tbody>
                     {requestRows.map((row) => (
                       <tr key={row.id} className="border-t border-border/50">
                         <td className="px-3 py-2">{row.itemName}</td>
+                        <td className="px-3 py-2 text-muted-foreground">{row.category}</td>
                         <td className="px-3 py-2">
                           <Input
                             className="h-8"
@@ -1971,11 +2323,101 @@ export function InventoryModule() {
                           />
                         </td>
                         <td className="px-3 py-2">{row.uom}</td>
+                        <td className="px-3 py-2 text-right">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="h-8 px-2"
+                            onClick={() => removeRequestRow(row.id)}
+                            disabled={requestRows.length === 1}
+                          >
+                            Remove
+                          </Button>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
+              <div className="flex justify-end">
+                <input
+                  ref={requestImportInputRef}
+                  type="file"
+                  accept=".xlsx,.xls,.csv"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) {
+                      void importBulkRequestFile(file);
+                    }
+                    e.currentTarget.value = "";
+                  }}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="mr-2 h-8"
+                  onClick={() => requestImportInputRef.current?.click()}
+                >
+                  Import
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8"
+                  onClick={() => setRequestItemPickerOpen((prev) => !prev)}
+                >
+                  <Plus className="mr-1 h-3.5 w-3.5" />
+                  Add Item
+                </Button>
+              </div>
+              {requestItemPickerOpen ? (
+                <div className="space-y-2 rounded-md border border-border p-3">
+                  <Input
+                    className="h-8"
+                    placeholder="Search item, category, or UoM"
+                    value={requestItemSearch}
+                    onChange={(e) => setRequestItemSearch(e.target.value)}
+                  />
+                  <div className="max-h-48 overflow-auto rounded-md border border-border/60">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-muted/40">
+                        <tr>
+                          <th className="px-2 py-2 font-medium">Item / Tool name</th>
+                          <th className="px-2 py-2 font-medium">Category</th>
+                          <th className="px-2 py-2 font-medium">Quantity</th>
+                          <th className="px-2 py-2 font-medium">UoM</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {requestSelectableItems.length === 0 ? (
+                          <tr>
+                            <td className="px-2 py-3 text-center text-muted-foreground" colSpan={4}>
+                              No matching items found.
+                            </td>
+                          </tr>
+                        ) : (
+                          requestSelectableItems.map((item) => (
+                            <tr
+                              key={item.id}
+                              className="cursor-pointer border-t border-border/50 hover:bg-muted/40"
+                              onClick={() => addRequestItemRow(item)}
+                            >
+                              <td className="px-2 py-2">{item.itemName}</td>
+                              <td className="px-2 py-2 text-muted-foreground">{item.category}</td>
+                              <td className="px-2 py-2 tabular-nums">{item.available}</td>
+                              <td className="px-2 py-2">{item.uom}</td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              ) : null}
 
               {requestError ? <p className="text-xs text-red-600">{requestError}</p> : null}
             </div>
