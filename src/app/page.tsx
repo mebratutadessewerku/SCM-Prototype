@@ -20,7 +20,6 @@ import {
   Boxes,
   Building2,
   ChevronDown,
-  ClipboardCheck,
   Clock,
   FileBarChart2,
   FileSearch,
@@ -34,6 +33,7 @@ import {
   PieChart,
   Search,
   ShoppingCart,
+  Settings,
   Users,
   Plus,
   Wallet,
@@ -63,8 +63,8 @@ type MainModule =
   | "Sourcing"
   | "Inventory"
   | "Budget"
-  | "Approvals"
-  | "Reporting";
+  | "Reporting"
+  | "Settings";
 
 type ProcurementTab =
   | "Overview"
@@ -84,8 +84,8 @@ const modules: { label: MainModule; icon: React.ElementType }[] = [
   { label: "Procurement", icon: ShoppingCart },
   { label: "Inventory", icon: Boxes },
   { label: "Budget", icon: HandCoins },
-  { label: "Approvals", icon: ClipboardCheck },
   { label: "Reporting", icon: FileBarChart2 },
+  { label: "Settings", icon: Settings },
 ];
 
 const statusTone: Record<string, string> = {
@@ -169,12 +169,12 @@ type CreatedPrRecord = {
 
 type PrBomRow = {
   id: string;
-  itemName: string;
+  no: string;
+  partNumber: string;
+  itemDescription: string;
   quantity: string;
-  unitOfMeasure: string;
-  specification: string;
-  requiredDate: string;
-  estimatedCost: string;
+  unitPrice: string;
+  totalPrice: string;
 };
 
 type ProjectBillDocument = {
@@ -193,12 +193,12 @@ type ProjectBillDocument = {
 function createEmptyBomRow(): PrBomRow {
   return {
     id: typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random()),
-    itemName: "",
+    no: "",
+    partNumber: "",
+    itemDescription: "",
     quantity: "",
-    unitOfMeasure: "",
-    specification: "",
-    requiredDate: "",
-    estimatedCost: "",
+    unitPrice: "",
+    totalPrice: "",
   };
 }
 
@@ -340,14 +340,14 @@ function PurchaseRequisitionForm({ onClose, onSubmit }: { onClose: () => void; o
       return;
     }
     setBomRows(
-      selected.lines.map((line) => ({
+      selected.lines.map((line, index) => ({
         id: typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random()),
-        itemName: line.itemName,
+        no: String(index + 1),
+        partNumber: "",
+        itemDescription: line.itemName,
         quantity: line.quantity,
-        unitOfMeasure: line.unitOfMeasure,
-        specification: line.specification ?? "",
-        requiredDate: line.requiredDate,
-        estimatedCost: line.estimatedCost,
+        unitPrice: "",
+        totalPrice: line.estimatedCost,
       }))
     );
   }, []);
@@ -366,27 +366,27 @@ function PurchaseRequisitionForm({ onClose, onSubmit }: { onClose: () => void; o
 
       const header = lines[0].split(",").map((cell) => cell.trim().toLowerCase());
       const indexOf = (...names: string[]) => header.findIndex((h) => names.some((n) => h === n || h.includes(n)));
-      const nameIdx = indexOf("item / service name", "item name", "item", "name");
+      const noIdx = indexOf("no", "number", "line no");
+      const partIdx = indexOf("part number", "item part number", "part");
+      const descIdx = indexOf("item description", "description", "item / service name", "item name", "item", "name");
       const qtyIdx = indexOf("quantity", "qty");
-      const unitIdx = indexOf("unit of measurement", "unit of measure", "uom", "unit");
-      const specIdx = indexOf("specifications", "specification", "spec");
-      const dateIdx = indexOf("required date", "delivery date", "date");
-      const costIdx = indexOf("estimated cost", "cost", "price", "amount");
-      const hasHeaderMapping = [nameIdx, qtyIdx, unitIdx, specIdx, dateIdx, costIdx].some((i) => i >= 0);
+      const unitPriceIdx = indexOf("unit price", "unit cost", "price");
+      const totalPriceIdx = indexOf("total price", "total cost", "amount", "estimated cost");
+      const hasHeaderMapping = [noIdx, partIdx, descIdx, qtyIdx, unitPriceIdx, totalPriceIdx].some((i) => i >= 0);
 
       const rows = lines.slice(1).map((line) => {
         const cols = line.split(",").map((cell) => cell.trim());
         const fallback = (idx: number, backup: number) => (idx >= 0 ? cols[idx] ?? "" : cols[backup] ?? "");
         return {
           id: typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random()),
-          itemName: hasHeaderMapping ? fallback(nameIdx, 0) : (cols[0] ?? ""),
-          quantity: hasHeaderMapping ? fallback(qtyIdx, 1) : (cols[1] ?? ""),
-          unitOfMeasure: hasHeaderMapping ? fallback(unitIdx, 2) : (cols[2] ?? ""),
-          specification: hasHeaderMapping ? fallback(specIdx, 3) : (cols[3] ?? ""),
-          requiredDate: hasHeaderMapping ? fallback(dateIdx, 4) : (cols[4] ?? ""),
-          estimatedCost: hasHeaderMapping ? fallback(costIdx, 5) : (cols[5] ?? ""),
+          no: hasHeaderMapping ? fallback(noIdx, 0) : (cols[0] ?? ""),
+          partNumber: hasHeaderMapping ? fallback(partIdx, 1) : (cols[1] ?? ""),
+          itemDescription: hasHeaderMapping ? fallback(descIdx, 2) : (cols[2] ?? ""),
+          quantity: hasHeaderMapping ? fallback(qtyIdx, 3) : (cols[3] ?? ""),
+          unitPrice: hasHeaderMapping ? fallback(unitPriceIdx, 4) : (cols[4] ?? ""),
+          totalPrice: hasHeaderMapping ? fallback(totalPriceIdx, 5) : (cols[5] ?? ""),
         } satisfies PrBomRow;
-      }).filter((r) => r.itemName || r.quantity || r.unitOfMeasure || r.specification || r.requiredDate || r.estimatedCost);
+      }).filter((r) => r.no || r.partNumber || r.itemDescription || r.quantity || r.unitPrice || r.totalPrice);
 
       if (rows.length === 0) {
         throw new Error("No valid BOM items were found in the uploaded file.");
@@ -421,7 +421,7 @@ function PurchaseRequisitionForm({ onClose, onSubmit }: { onClose: () => void; o
       setFormError("Justification is required.");
       return;
     }
-    if (bomRows.length < 1 || !bomRows.some((r) => r.itemName.trim())) {
+    if (bomRows.length < 1 || !bomRows.some((r) => r.itemDescription.trim())) {
       setFormError("At least one line item is required.");
       return;
     }
@@ -429,7 +429,7 @@ function PurchaseRequisitionForm({ onClose, onSubmit }: { onClose: () => void; o
     const createdAt = new Date().toISOString();
     const idx = Math.floor(Math.random() * 900 + 100);
     const ref = `PR-${idx}${String(Date.now()).slice(-2)}`;
-    const baseline = bomRows.reduce((sum, r) => sum + (Number.parseFloat(r.estimatedCost || "0") || 0), 0);
+    const baseline = bomRows.reduce((sum, r) => sum + (Number.parseFloat(r.totalPrice || "0") || 0), 0);
     const record: CreatedPrRecord = {
       id: typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random()),
       ref,
@@ -457,10 +457,10 @@ function PurchaseRequisitionForm({ onClose, onSubmit }: { onClose: () => void; o
       departmentKey: kind === "project" ? null : department,
       createdAt,
       lineItems: bomRows.map((r) => ({
-        name: r.itemName || "Item",
+        name: r.itemDescription || "Item",
         quantity: r.quantity || "1",
-        unit: r.unitOfMeasure || "pcs",
-        specification: r.specification || "-",
+        unit: r.partNumber || "N/A",
+        specification: `No: ${r.no || "-"} | Unit Price: ${r.unitPrice || "0"} | Total Price: ${r.totalPrice || "0"}`,
       })),
       baselineTotal: baseline,
       terms: justification.trim(),
@@ -614,12 +614,12 @@ function PurchaseRequisitionForm({ onClose, onSubmit }: { onClose: () => void; o
                   ) : null}
                 </div>
                 <div className="grid gap-3 sm:grid-cols-2">
-                  <div className="space-y-1"><label className="text-xs font-medium text-foreground">Item / Service Name</label><Input className="h-9 text-xs" value={row.itemName} onChange={(e) => updateBomRow(row.id, { itemName: e.target.value })} /></div>
+                  <div className="space-y-1"><label className="text-xs font-medium text-foreground">No</label><Input className="h-9 text-xs" value={row.no} onChange={(e) => updateBomRow(row.id, { no: e.target.value })} /></div>
+                  <div className="space-y-1"><label className="text-xs font-medium text-foreground">Part Number</label><Input className="h-9 text-xs" value={row.partNumber} onChange={(e) => updateBomRow(row.id, { partNumber: e.target.value })} /></div>
+                  <div className="space-y-1 sm:col-span-2"><label className="text-xs font-medium text-foreground">Item Description</label><Input className="h-9 text-xs" value={row.itemDescription} onChange={(e) => updateBomRow(row.id, { itemDescription: e.target.value })} /></div>
                   <div className="space-y-1"><label className="text-xs font-medium text-foreground">Quantity</label><Input className="h-9 text-xs" value={row.quantity} onChange={(e) => updateBomRow(row.id, { quantity: e.target.value })} /></div>
-                  <div className="space-y-1"><label className="text-xs font-medium text-foreground">Unit of Measurement</label><Input className="h-9 text-xs" value={row.unitOfMeasure} onChange={(e) => updateBomRow(row.id, { unitOfMeasure: e.target.value })} /></div>
-                  <div className="space-y-1"><label className="text-xs font-medium text-foreground">Specifications</label><Input className="h-9 text-xs" value={row.specification} onChange={(e) => updateBomRow(row.id, { specification: e.target.value })} /></div>
-                  <div className="space-y-1"><label className="text-xs font-medium text-foreground">Required Date</label><Input className="h-9 text-xs" type="date" value={row.requiredDate} onChange={(e) => updateBomRow(row.id, { requiredDate: e.target.value })} /></div>
-                  <div className="space-y-1"><label className="text-xs font-medium text-foreground">Estimated Cost (optional)</label><Input className="h-9 text-xs" value={row.estimatedCost} onChange={(e) => updateBomRow(row.id, { estimatedCost: e.target.value })} /></div>
+                  <div className="space-y-1"><label className="text-xs font-medium text-foreground">Unit Price</label><Input className="h-9 text-xs" value={row.unitPrice} onChange={(e) => updateBomRow(row.id, { unitPrice: e.target.value })} /></div>
+                  <div className="space-y-1"><label className="text-xs font-medium text-foreground">Total Price</label><Input className="h-9 text-xs" value={row.totalPrice} onChange={(e) => updateBomRow(row.id, { totalPrice: e.target.value })} /></div>
                   <div className="space-y-1 sm:col-span-2"><label className="text-xs font-medium text-foreground">Line Documents</label><Input className="h-9 cursor-pointer text-xs file:mr-2 file:text-xs" type="file" /></div>
                 </div>
               </div>
@@ -679,21 +679,23 @@ type CreatedRfqRecord = {
 };
 type RfqItemRow = {
   id: string;
-  name: string;
-  description: string;
+  no: string;
+  partNumber: string;
+  itemDescription: string;
   quantity: string;
-  unit: string;
-  specification: string;
+  unitPrice: string;
+  totalPrice: string;
 };
 
 function createEmptyRfqItem(): RfqItemRow {
   return {
     id: typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random()),
-    name: "",
-    description: "",
+    no: "",
+    partNumber: "",
+    itemDescription: "",
     quantity: "",
-    unit: "",
-    specification: "",
+    unitPrice: "",
+    totalPrice: "",
   };
 }
 
@@ -728,21 +730,31 @@ function RequestForQuotationForm({
   const [step, setStep] = useState<RfqStep>(1);
   const [rfqTitle, setRfqTitle] = useState(() => initialData?.title ?? "");
   const [prReference, setPrReference] = useState(() => initialData?.prRef ?? "");
-  const [baselineTotal, setBaselineTotal] = useState(() => String(initialData?.baselineTotal ?? ""));
   const [submissionDeadline, setSubmissionDeadline] = useState(() => initialData?.deadline ?? "");
   const [deliveryTimeline, setDeliveryTimeline] = useState(() => initialData?.deliveryTimeline ?? "");
   const [terms, setTerms] = useState(() => initialData?.terms ?? "");
   const [attachments, setAttachments] = useState<number[]>([0]);
+  const prLineItems = useMemo(() => initialData?.lineItems ?? [], [initialData?.lineItems]);
+  const parsePrLineSpecification = useCallback((value: string) => {
+    const no = value.match(/No:\s*([^|]+)/i)?.[1]?.trim() ?? "";
+    const unitPrice = value.match(/Unit Price:\s*([^|]+)/i)?.[1]?.trim() ?? "";
+    const totalPrice = value.match(/Total Price:\s*([^|]+)/i)?.[1]?.trim() ?? "";
+    return { no, unitPrice, totalPrice };
+  }, []);
   const [itemRows, setItemRows] = useState<RfqItemRow[]>(() =>
-    initialData?.lineItems?.length
-      ? initialData.lineItems.map((r) => ({
+    prLineItems.length
+      ? prLineItems.map((r, index) => {
+          const parsed = parsePrLineSpecification(r.specification ?? "");
+          return {
           id: typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random()),
-          name: r.name,
-          description: "",
+          no: parsed.no || String(index + 1),
+          partNumber: r.unit ?? "",
+          itemDescription: r.name,
           quantity: r.quantity,
-          unit: r.unit,
-          specification: r.specification,
-        }))
+          unitPrice: parsed.unitPrice,
+          totalPrice: parsed.totalPrice,
+        };
+      })
       : [createEmptyRfqItem()]
   );
   const [selectedSuppliers, setSelectedSuppliers] = useState<string[]>(() => initialData?.selectedSuppliers ?? []);
@@ -794,14 +806,14 @@ function RequestForQuotationForm({
       }
     }
     if (step === 2) {
-      if (itemRows.length < 1) {
+      if (itemRows.length < 1 || !itemRows.some((r) => r.itemDescription.trim())) {
         setStepError("Step 2 requires at least one item.");
         return;
       }
     }
     setStepError(null);
     setStep((prev) => (Math.min(3, prev + 1) as RfqStep));
-  }, [step, rfqTitle, submissionDeadline, itemRows.length]);
+  }, [step, rfqTitle, submissionDeadline, itemRows]);
 
   const createRfq = useCallback(() => {
     if (selectedSuppliers.length < 1) {
@@ -810,6 +822,7 @@ function RequestForQuotationForm({
     }
     const now = new Date().toISOString();
     const newId = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random());
+    const derivedBaselineTotal = itemRows.reduce((sum, row) => sum + (Number.parseFloat(row.totalPrice || "0") || 0), 0);
     const record: CreatedRfqRecord = {
       id: initialData?.id ?? newId,
       rfq: editingRfqId?.trim() || `RFQ-${String(Date.now()).slice(-6)}`,
@@ -824,12 +837,12 @@ function RequestForQuotationForm({
       createdAt: initialData?.createdAt ?? now,
       deliveryTimeline: deliveryTimeline.trim(),
       terms: terms.trim(),
-      baselineTotal: Number.parseFloat(baselineTotal || "0") || 0,
+      baselineTotal: derivedBaselineTotal || Number(initialData?.baselineTotal ?? 0) || 0,
       lineItems: itemRows.map((r) => ({
-        name: r.name || "Item",
+        name: r.itemDescription || "Item",
         quantity: r.quantity || "1",
-        unit: r.unit || "pcs",
-        specification: r.specification || "",
+        unit: r.partNumber || "N/A",
+        specification: `No: ${r.no || "-"} | Unit Price: ${r.unitPrice || "0"} | Total Price: ${r.totalPrice || "0"}`,
       })),
       selectedSuppliers: [...selectedSuppliers],
       quotations: [],
@@ -839,7 +852,7 @@ function RequestForQuotationForm({
     onSubmit(record);
     setStepError(null);
     onClose();
-  }, [selectedSuppliers, rfqTitle, prReference, submissionDeadline, deliveryTimeline, terms, baselineTotal, itemRows, onSubmit, onClose, initialData?.sourceKind, initialData?.projectKey, initialData?.departmentKey, initialData?.id, editingRfqId]);
+  }, [selectedSuppliers, rfqTitle, prReference, submissionDeadline, deliveryTimeline, terms, itemRows, onSubmit, onClose, initialData?.sourceKind, initialData?.projectKey, initialData?.departmentKey, initialData?.id, initialData?.baselineTotal, editingRfqId]);
 
   return (
     <>
@@ -883,10 +896,6 @@ function RequestForQuotationForm({
                 </select>
               </div>
               <div className="flex flex-col gap-3">
-                <label className="text-xs font-medium text-foreground">BOQ Price Total (Baseline)</label>
-                <Input className="h-9" type="number" placeholder="" value={baselineTotal} onChange={(e) => setBaselineTotal(e.target.value)} />
-              </div>
-              <div className="flex flex-col gap-3">
                 <label className="text-xs font-medium text-foreground">Submission Deadline</label>
                 <Input className="h-9" type="date" value={submissionDeadline} onChange={(e) => setSubmissionDeadline(e.target.value)} />
               </div>
@@ -928,6 +937,11 @@ function RequestForQuotationForm({
 
         {step === 2 && (
           <div className="space-y-5">
+            {prLineItems.length > 0 ? (
+              <p className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-900">
+                {prLineItems.length} item(s) auto-populated from approved PR {prReference || initialData?.prRef || ""}.
+              </p>
+            ) : null}
             <div className="space-y-5">
               {itemRows.map((row, index) => {
                 const multiple = itemRows.length > 1;
@@ -959,26 +973,38 @@ function RequestForQuotationForm({
                   )}
                   <div className="grid w-full gap-3 sm:grid-cols-2">
                     <div className="flex flex-col gap-3">
-                      <label htmlFor={`rfq-item-${row.id}-name`} className="text-xs font-medium text-foreground">
-                        Name
+                      <label htmlFor={`rfq-item-${row.id}-no`} className="text-xs font-medium text-foreground">
+                        No
                       </label>
                       <Input
-                        id={`rfq-item-${row.id}-name`}
+                        id={`rfq-item-${row.id}-no`}
                         className="h-9 text-xs"
-                        value={row.name}
-                        onChange={(e) => updateItemRow(row.id, { name: e.target.value })}
+                        value={row.no}
+                        onChange={(e) => updateItemRow(row.id, { no: e.target.value })}
                         placeholder=""
                       />
                     </div>
                     <div className="flex flex-col gap-3">
-                      <label htmlFor={`rfq-item-${row.id}-description`} className="text-xs font-medium text-foreground">
-                        Notes
+                      <label htmlFor={`rfq-item-${row.id}-part`} className="text-xs font-medium text-foreground">
+                        Part Number
                       </label>
                       <Input
-                        id={`rfq-item-${row.id}-description`}
+                        id={`rfq-item-${row.id}-part`}
                         className="h-9 text-xs"
-                        value={row.description}
-                        onChange={(e) => updateItemRow(row.id, { description: e.target.value })}
+                        value={row.partNumber}
+                        onChange={(e) => updateItemRow(row.id, { partNumber: e.target.value })}
+                        placeholder=""
+                      />
+                    </div>
+                    <div className="flex flex-col gap-3 sm:col-span-2">
+                      <label htmlFor={`rfq-item-${row.id}-desc`} className="text-xs font-medium text-foreground">
+                        Item Description
+                      </label>
+                      <Input
+                        id={`rfq-item-${row.id}-desc`}
+                        className="h-9 text-xs"
+                        value={row.itemDescription}
+                        onChange={(e) => updateItemRow(row.id, { itemDescription: e.target.value })}
                         placeholder=""
                       />
                     </div>
@@ -995,31 +1021,26 @@ function RequestForQuotationForm({
                       />
                     </div>
                     <div className="flex flex-col gap-3">
-                      <label htmlFor={`rfq-item-${row.id}-unit`} className="text-xs font-medium text-foreground">
-                        Unit of Measure
-                      </label>
-                      <select
-                        id={`rfq-item-${row.id}-unit`}
-                        className="h-9 w-full rounded-md border border-input bg-background px-3 text-xs"
-                        value={row.unit}
-                        onChange={(e) => updateItemRow(row.id, { unit: e.target.value })}
-                      >
-                        <option value="">Select unit</option>
-                        <option value="pcs">pcs</option>
-                        <option value="kg">kg</option>
-                        <option value="l">L</option>
-                        <option value="service">service</option>
-                      </select>
-                    </div>
-                    <div className="flex flex-col gap-3 sm:col-span-2">
-                      <label htmlFor={`rfq-item-${row.id}-spec`} className="text-xs font-medium text-foreground">
-                        Specification
+                      <label htmlFor={`rfq-item-${row.id}-unit-price`} className="text-xs font-medium text-foreground">
+                        Unit Price
                       </label>
                       <Input
-                        id={`rfq-item-${row.id}-spec`}
+                        id={`rfq-item-${row.id}-unit-price`}
                         className="h-9 text-xs"
-                        value={row.specification}
-                        onChange={(e) => updateItemRow(row.id, { specification: e.target.value })}
+                        value={row.unitPrice}
+                        onChange={(e) => updateItemRow(row.id, { unitPrice: e.target.value })}
+                        placeholder=""
+                      />
+                    </div>
+                    <div className="flex flex-col gap-3">
+                      <label htmlFor={`rfq-item-${row.id}-total-price`} className="text-xs font-medium text-foreground">
+                        Total Price
+                      </label>
+                      <Input
+                        id={`rfq-item-${row.id}-total-price`}
+                        className="h-9 text-xs"
+                        value={row.totalPrice}
+                        onChange={(e) => updateItemRow(row.id, { totalPrice: e.target.value })}
                         placeholder=""
                       />
                     </div>
@@ -1142,6 +1163,8 @@ type PoStep = 1 | 2 | 3;
 type CreatedPoRecord = {
   id: string;
   po: string;
+  prRef: string;
+  rfqRef: string | null;
   supplier: string;
   approval: string;
   orderSource: string;
@@ -1153,6 +1176,16 @@ type CreatedPoRecord = {
   totalAmount: number;
   deliveryTerms: string;
   paymentTerms: string;
+  paymentMode: string;
+  paymentTermsLabel: string;
+  incoterm: string;
+  advancePayment: string;
+  shipmentMode: string;
+  loadingOrigin: string;
+  portOfLoading: string;
+  destination: string;
+  partialShipment: string;
+  transshipment: string;
   createdAt: string;
 };
 
@@ -1166,8 +1199,18 @@ type PoFormInitialData = {
   approval?: string;
   deliveryTerms?: string;
   paymentTerms?: string;
+  paymentMode?: string;
+  paymentTermsLabel?: string;
+  incoterm?: string;
+  advancePayment?: string;
+  shipmentMode?: string;
+  loadingOrigin?: string;
+  portOfLoading?: string;
+  destination?: string;
+  partialShipment?: string;
+  transshipment?: string;
   orderTitle?: string;
-  lineItems?: Array<{ name: string; quantity: string; unit: string }>;
+  lineItems?: Array<{ name: string; quantity: string; unit: string; price?: number }>;
 };
 
 type PoLineRow = {
@@ -1182,7 +1225,7 @@ type PoLineRow = {
 const DEFAULT_PO_DELIVERY_TERMS = "Delivery within agreed timeline to designated receiving site.";
 const DEFAULT_PO_PAYMENT_TERMS = "Payment within 30 days after verified delivery and invoice acceptance.";
 
-function buildInitialPoLines(items?: Array<{ name: string; quantity: string; unit: string }>): PoLineRow[] {
+function buildInitialPoLines(items?: Array<{ name: string; quantity: string; unit: string; price?: number }>): PoLineRow[] {
   if (items && items.length > 0) {
     return items.map((li, i) => ({
       id:
@@ -1191,7 +1234,7 @@ function buildInitialPoLines(items?: Array<{ name: string; quantity: string; uni
           : `l-seed-${i}-${String(Math.random()).slice(2, 9)}`,
       itemOrService: li.name,
       quantity: li.quantity,
-      price: "",
+      price: li.price !== undefined ? String(li.price) : "",
       deliveryDate: "",
       lineGroup: li.unit || "",
     }));
@@ -1224,6 +1267,16 @@ function PurchaseOrderForm({
   const [orderTitle, setOrderTitle] = useState(() => initialData?.orderTitle ?? "");
   const [deliveryTerms] = useState(() => initialData?.deliveryTerms ?? DEFAULT_PO_DELIVERY_TERMS);
   const [paymentTerms] = useState(() => initialData?.paymentTerms ?? DEFAULT_PO_PAYMENT_TERMS);
+  const [paymentMode, setPaymentMode] = useState(() => initialData?.paymentMode ?? "PDC");
+  const [paymentTermsLabel, setPaymentTermsLabel] = useState(() => initialData?.paymentTermsLabel ?? "Net 60 Days");
+  const [incoterm, setIncoterm] = useState(() => initialData?.incoterm ?? "FOB - Free On Board");
+  const [advancePayment, setAdvancePayment] = useState(() => initialData?.advancePayment ?? "0%");
+  const [shipmentMode, setShipmentMode] = useState(() => initialData?.shipmentMode ?? "Air");
+  const [loadingOrigin, setLoadingOrigin] = useState(() => initialData?.loadingOrigin ?? "United Arab Emirates");
+  const [portOfLoading, setPortOfLoading] = useState(() => initialData?.portOfLoading ?? "Dubai");
+  const [destination, setDestination] = useState(() => initialData?.destination ?? "Addis Ababa");
+  const [partialShipment, setPartialShipment] = useState(() => initialData?.partialShipment ?? "Allowed");
+  const [transshipment, setTransshipment] = useState(() => initialData?.transshipment ?? "Allowed");
 
   const selectClass = "h-9 w-full rounded-md border border-input bg-background px-3 text-xs";
 
@@ -1262,6 +1315,8 @@ function PurchaseOrderForm({
     const record: CreatedPoRecord = {
       id: typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random()),
       po: editingPoNumber ?? `PO-${String(Date.now()).slice(-6)}`,
+      prRef: prRefValue.trim() || "-",
+      rfqRef: rfqRefValue.trim() || null,
       supplier: supplierValue.trim() || "TBD Supplier",
       approval: initialData?.approval ?? "Pending Approval",
       orderSource: requestSource === "project" ? "Project" : "Department",
@@ -1282,11 +1337,21 @@ function PurchaseOrderForm({
       }, 0),
       deliveryTerms,
       paymentTerms,
+      paymentMode: paymentMode.trim() || "PDC",
+      paymentTermsLabel: paymentTermsLabel.trim() || "Net 60 Days",
+      incoterm: incoterm.trim() || "FOB - Free On Board",
+      advancePayment: advancePayment.trim() || "0%",
+      shipmentMode: shipmentMode.trim() || "Air",
+      loadingOrigin: loadingOrigin.trim() || "United Arab Emirates",
+      portOfLoading: portOfLoading.trim() || "Dubai",
+      destination: destination.trim() || "Addis Ababa",
+      partialShipment: partialShipment.trim() || "Allowed",
+      transshipment: transshipment.trim() || "Allowed",
       createdAt: new Date().toISOString(),
     };
     onSubmit(record);
     onClose();
-  }, [lines, orderCategory, onSubmit, onClose, supplierValue, requestSource, initialData, editingPoNumber, deliveryTerms, paymentTerms]);
+  }, [lines, orderCategory, onSubmit, onClose, supplierValue, requestSource, initialData, editingPoNumber, deliveryTerms, paymentTerms, prRefValue, rfqRefValue, paymentMode, paymentTermsLabel, incoterm, advancePayment, shipmentMode, loadingOrigin, portOfLoading, destination, partialShipment, transshipment]);
 
   const stepLabelClass = (value: PoStep) =>
     cn(
@@ -1528,98 +1593,93 @@ function PurchaseOrderForm({
 
         {step === 2 && (
           <div className="space-y-5 text-xs">
-            <div className="flex w-full flex-col gap-5">
-              {lines.map((row, index) => {
-                const multiple = lines.length > 1;
-                const canRemove = lines.length > 1;
-                return (
-                  <div
-                    key={row.id}
-                    className={cn(
-                      "relative w-full min-w-0",
-                      multiple && "rounded-md border border-border p-3"
-                    )}
-                  >
-                    {canRemove ? (
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-sm"
-                        className="absolute right-1 top-1 h-7 w-7 text-muted-foreground hover:text-foreground"
-                        onClick={() => removeLine(row.id)}
-                        aria-label="Remove line"
-                      >
-                        <X className="h-4 w-4" />
-                      </Button>
-                    ) : null}
-                    {multiple ? (
-                      <p className="mb-2 pr-8 text-xs font-medium text-muted-foreground">Line {index + 1}</p>
-                    ) : null}
-                    <div className="grid w-full grid-cols-2 gap-3">
-                      <div className="col-span-2 flex flex-col gap-3">
-                        <label htmlFor={`po-line-${row.id}-item`} className="text-xs font-medium text-foreground">
-                          Item or Service
-                        </label>
-                        <Input
-                          id={`po-line-${row.id}-item`}
-                          className="h-9 w-full text-xs"
-                          value={row.itemOrService}
-                          onChange={(e) => updateLine(row.id, { itemOrService: e.target.value })}
-                          placeholder=""
-                        />
-                      </div>
-                      <div className="flex flex-col gap-3">
-                        <label htmlFor={`po-line-${row.id}-qty`} className="text-xs font-medium text-foreground">
-                          Quantity
-                        </label>
-                        <Input
-                          id={`po-line-${row.id}-qty`}
-                          className="h-9 w-full text-xs"
-                          value={row.quantity}
-                          onChange={(e) => updateLine(row.id, { quantity: e.target.value })}
-                          placeholder=""
-                        />
-                      </div>
-                      <div className="flex flex-col gap-3">
-                        <label htmlFor={`po-line-${row.id}-price`} className="text-xs font-medium text-foreground">
-                          Price
-                        </label>
-                        <Input
-                          id={`po-line-${row.id}-price`}
-                          className="h-9 w-full text-xs"
-                          value={row.price}
-                          onChange={(e) => updateLine(row.id, { price: e.target.value })}
-                          placeholder=""
-                        />
-                      </div>
-                      <div className="flex flex-col gap-3">
-                        <label htmlFor={`po-line-${row.id}-delivery`} className="text-xs font-medium text-foreground">
-                          Delivery date
-                        </label>
-                        <Input
-                          id={`po-line-${row.id}-delivery`}
-                          className="h-9 w-full text-xs"
-                          type="date"
-                          value={row.deliveryDate}
-                          onChange={(e) => updateLine(row.id, { deliveryDate: e.target.value })}
-                        />
-                      </div>
-                      <div className="flex flex-col gap-3">
-                        <label htmlFor={`po-line-${row.id}-group`} className="text-xs font-medium text-foreground">
-                          Line Group
-                        </label>
-                        <Input
-                          id={`po-line-${row.id}-group`}
-                          className="h-9 w-full text-xs"
-                          value={row.lineGroup}
-                          onChange={(e) => updateLine(row.id, { lineGroup: e.target.value })}
-                          placeholder=""
-                        />
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
+            <div className="overflow-x-auto rounded-lg border border-border/70">
+              <table className="w-full min-w-[980px] text-left text-xs">
+                <thead className="bg-muted/50">
+                  <tr>
+                    <th className="px-3 py-2.5 font-medium">Item or Service</th>
+                    <th className="px-3 py-2.5 font-medium">Quantity</th>
+                    <th className="px-3 py-2.5 font-medium">Price</th>
+                    <th className="px-3 py-2.5 font-medium">Total price</th>
+                    <th className="px-3 py-2.5 font-medium">Delivery date</th>
+                    <th className="px-3 py-2.5 font-medium">Line Group</th>
+                    <th className="px-3 py-2.5 text-right font-medium">Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {lines.map((row) => {
+                    const qty = Number.parseFloat(row.quantity || "0") || 0;
+                    const price = Number.parseFloat(row.price || "0") || 0;
+                    const totalPrice = qty * price;
+                    return (
+                      <tr key={row.id} className="border-t border-border/60">
+                        <td className="px-3 py-2.5">
+                          <Input
+                            id={`po-line-${row.id}-item`}
+                            className="h-8 text-xs"
+                            value={row.itemOrService}
+                            onChange={(e) => updateLine(row.id, { itemOrService: e.target.value })}
+                          />
+                        </td>
+                        <td className="px-3 py-2.5">
+                          <Input
+                            id={`po-line-${row.id}-qty`}
+                            className="h-8 text-xs"
+                            value={row.quantity}
+                            onChange={(e) => updateLine(row.id, { quantity: e.target.value })}
+                          />
+                        </td>
+                        <td className="px-3 py-2.5">
+                          <Input
+                            id={`po-line-${row.id}-price`}
+                            className="h-8 text-xs"
+                            value={row.price}
+                            onChange={(e) => updateLine(row.id, { price: e.target.value })}
+                          />
+                        </td>
+                        <td className="px-3 py-2.5">
+                          <Input
+                            id={`po-line-${row.id}-total`}
+                            className="h-8 text-xs"
+                            value={totalPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            readOnly
+                          />
+                        </td>
+                        <td className="px-3 py-2.5">
+                          <Input
+                            id={`po-line-${row.id}-delivery`}
+                            className="h-8 text-xs"
+                            type="date"
+                            value={row.deliveryDate}
+                            onChange={(e) => updateLine(row.id, { deliveryDate: e.target.value })}
+                          />
+                        </td>
+                        <td className="px-3 py-2.5">
+                          <Input
+                            id={`po-line-${row.id}-group`}
+                            className="h-8 text-xs"
+                            value={row.lineGroup}
+                            onChange={(e) => updateLine(row.id, { lineGroup: e.target.value })}
+                          />
+                        </td>
+                        <td className="px-3 py-2.5 text-right">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon-sm"
+                            className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                            onClick={() => removeLine(row.id)}
+                            aria-label="Remove line"
+                            disabled={lines.length <= 1}
+                          >
+                            <X className="h-4 w-4" />
+                          </Button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
             <div className="flex justify-center">
               <Button type="button" variant="outline" size="sm" className="h-8 min-w-24 gap-1" onClick={addLine}>
@@ -1647,37 +1707,77 @@ function PurchaseOrderForm({
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="flex flex-col gap-3">
                 <label htmlFor="po-payment-mode" className="text-xs font-medium text-foreground">
-                  Payment Mode
+                  Mode of Payment
                 </label>
-                <select id="po-payment-mode" className={selectClass} defaultValue="">
-                  <option value="">Select mode</option>
-                  <option>Bank transfer</option>
+                <select id="po-payment-mode" className={selectClass} value={paymentMode} onChange={(e) => setPaymentMode(e.target.value)}>
+                  <option>PDC</option>
+                  <option>Bank Transfer</option>
                   <option>LC</option>
-                  <option>Advance</option>
                 </select>
+              </div>
+              <div className="flex flex-col gap-3">
+                <label htmlFor="po-payment-terms" className="text-xs font-medium text-foreground">
+                  Terms of Payment
+                </label>
+                <Input id="po-payment-terms" className="h-9" placeholder="e.g. Net 60 Days" value={paymentTermsLabel} onChange={(e) => setPaymentTermsLabel(e.target.value)} />
               </div>
               <div className="flex flex-col gap-3">
                 <label htmlFor="po-incoterms" className="text-xs font-medium text-foreground">
-                  Incoterms
+                  Incoterm
                 </label>
-                <select id="po-incoterms" className={selectClass} defaultValue="">
-                  <option value="">Select incoterms</option>
-                  <option>FOB</option>
-                  <option>CIF</option>
-                  <option>EXW</option>
+                <select id="po-incoterms" className={selectClass} value={incoterm} onChange={(e) => setIncoterm(e.target.value)}>
+                  <option>FOB - Free On Board</option>
+                  <option>CIF - Cost, Insurance, and Freight</option>
+                  <option>EXW - Ex Works</option>
                 </select>
               </div>
               <div className="flex flex-col gap-3">
-                <label htmlFor="po-shipment-details" className="text-xs font-medium text-foreground">
-                  Shipment details
+                <label htmlFor="po-advance-percentage" className="text-xs font-medium text-foreground">
+                  Advance Percentage
                 </label>
-                <Input id="po-shipment-details" className="h-9" placeholder="" />
+                <Input id="po-advance-percentage" className="h-9" placeholder="e.g. 0%" value={advancePayment} onChange={(e) => setAdvancePayment(e.target.value)} />
               </div>
               <div className="flex flex-col gap-3">
-                <label htmlFor="po-eta" className="text-xs font-medium text-foreground">
-                  Estimated time of arrival
+                <label htmlFor="po-mode-shipment" className="text-xs font-medium text-foreground">
+                  Mode of Shipment
                 </label>
-                <Input id="po-eta" className="h-9" type="date" />
+                <Input id="po-mode-shipment" className="h-9" placeholder="e.g. Air, Sea, Land" value={shipmentMode} onChange={(e) => setShipmentMode(e.target.value)} />
+              </div>
+              <div className="flex flex-col gap-3">
+                <label htmlFor="po-loading-origin" className="text-xs font-medium text-foreground">
+                  Loading Origin
+                </label>
+                <Input id="po-loading-origin" className="h-9" placeholder="" value={loadingOrigin} onChange={(e) => setLoadingOrigin(e.target.value)} />
+              </div>
+              <div className="flex flex-col gap-3">
+                <label htmlFor="po-port-loading" className="text-xs font-medium text-foreground">
+                  Port of Loading
+                </label>
+                <Input id="po-port-loading" className="h-9" placeholder="" value={portOfLoading} onChange={(e) => setPortOfLoading(e.target.value)} />
+              </div>
+              <div className="flex flex-col gap-3">
+                <label htmlFor="po-port-destination" className="text-xs font-medium text-foreground">
+                  Port of Destination
+                </label>
+                <Input id="po-port-destination" className="h-9" placeholder="" value={destination} onChange={(e) => setDestination(e.target.value)} />
+              </div>
+              <div className="flex flex-col gap-3">
+                <label htmlFor="po-partial-shipment" className="text-xs font-medium text-foreground">
+                  Partial Shipment
+                </label>
+                <select id="po-partial-shipment" className={selectClass} value={partialShipment} onChange={(e) => setPartialShipment(e.target.value)}>
+                  <option>Allowed</option>
+                  <option>Not Allowed</option>
+                </select>
+              </div>
+              <div className="flex flex-col gap-3">
+                <label htmlFor="po-transshipment" className="text-xs font-medium text-foreground">
+                  Transshipment
+                </label>
+                <select id="po-transshipment" className={selectClass} value={transshipment} onChange={(e) => setTransshipment(e.target.value)}>
+                  <option>Allowed</option>
+                  <option>Not Allowed</option>
+                </select>
               </div>
             </div>
             <div className="space-y-3 rounded-md border border-border p-3">
@@ -2404,7 +2504,7 @@ function ProcurementModule({
   createdPos: CreatedPoRecord[];
   createdMasterDataRows: ItemMasterRow[];
 }) {
-  type UserRole = "All" | "Field Engineer" | "Team Lead" | "Sourcing Officer" | "Approver";
+  type UserRole = "All" | "Field Engineer" | "Team Lead" | "Sourcing Officer" | "Logistics Officer" | "Approver";
   type PrRow = {
     id?: string;
     ref: string;
@@ -2447,8 +2547,27 @@ function ProcurementModule({
   };
   type PoRow = {
     po: string;
+    prRef?: string;
+    rfqRef?: string | null;
     supplier: string;
     approval: string;
+    approvedBy?: string;
+    approvedAt?: string;
+    projectName?: string;
+    sourcingPerson?: string;
+    logisticsPerson?: string;
+    projectFinalized?: boolean;
+    logisticsFinalized?: boolean;
+    paymentMode?: string;
+    paymentTermsLabel?: string;
+    incoterm?: string;
+    advancePayment?: string;
+    shipmentMode?: string;
+    loadingOrigin?: string;
+    portOfLoading?: string;
+    destination?: string;
+    partialShipment?: string;
+    transshipment?: string;
     orderSource: string;
     requestType: string;
     sourceKind: SourceKind;
@@ -2635,7 +2754,32 @@ function ProcurementModule({
       };
     });
   });
-  const [poRows, setPoRows] = useState<PoRow[]>([...PO_MODULE_TABLE_ROWS]);
+  const withPoDefaults = useCallback(
+    (row: PoRow): PoRow => ({
+      ...row,
+      projectName:
+        row.projectName ??
+        (row.sourceKind === "project"
+          ? MODULE_FILTER_PROJECT_OPTIONS.find((p) => p.value === row.projectKey)?.label ?? "Abay Bank Cisco ISE"
+          : MODULE_FILTER_DEPARTMENT_OPTIONS.find((d) => d.value === row.departmentKey)?.label ?? "Operations"),
+      sourcingPerson: row.sourcingPerson ?? "Bete Zerihun",
+      logisticsPerson: row.logisticsPerson ?? "Yonatan Mesfin",
+      projectFinalized: row.projectFinalized ?? row.approval === "Approved",
+      logisticsFinalized: row.logisticsFinalized ?? row.approval === "Approved",
+      paymentMode: row.paymentMode ?? "PDC",
+      paymentTermsLabel: row.paymentTermsLabel ?? "Net 60 Days",
+      incoterm: row.incoterm ?? "FOB - Free On Board",
+      advancePayment: row.advancePayment ?? "0%",
+      shipmentMode: row.shipmentMode ?? "Air",
+      loadingOrigin: row.loadingOrigin ?? "United Arab Emirates",
+      portOfLoading: row.portOfLoading ?? "Dubai",
+      destination: row.destination ?? "Addis Ababa",
+      partialShipment: row.partialShipment ?? "Allowed",
+      transshipment: row.transshipment ?? "Allowed",
+    }),
+    [],
+  );
+  const [poRows, setPoRows] = useState<PoRow[]>(() => PO_MODULE_TABLE_ROWS.map((row) => withPoDefaults(row)));
   const [poStatusFilter, setPoStatusFilter] = useState<"All" | "Pending Approval" | "Approved" | "Rejected">("All");
   const [poApproveTarget, setPoApproveTarget] = useState<PoRow | null>(null);
   const [poRejectTarget, setPoRejectTarget] = useState<PoRow | null>(null);
@@ -2662,6 +2806,7 @@ function ProcurementModule({
   const [poCreateSeed, setPoCreateSeed] = useState<
     null | { source: "pr"; pr: PrRow } | { source: "rfq"; rfq: RfqRow }
   >(null);
+  const [approvedPrItemsByRef, setApprovedPrItemsByRef] = useState<Record<string, PrRow["lineItems"]>>({});
   const [prCommentRow, setPrCommentRow] = useState<PrRow | null>(null);
   const [prCommentText, setPrCommentText] = useState("");
   const [prDetailRow, setPrDetailRow] = useState<PrRow | null>(null);
@@ -2814,10 +2959,11 @@ function ProcurementModule({
   useEffect(() => {
     if (createdPos.length === 0) return;
     setPoRows((prev) => {
-      const next = [...createdPos, ...prev.filter((p) => !createdPos.some((c) => c.po === p.po))];
+      const enriched = createdPos.map((row) => withPoDefaults(row));
+      const next = [...enriched, ...prev.filter((p) => !enriched.some((c) => c.po === p.po))];
       return next.sort((a, b) => Date.parse((b as { createdAt?: string }).createdAt ?? "0") - Date.parse((a as { createdAt?: string }).createdAt ?? "0"));
     });
-  }, [createdPos]);
+  }, [createdPos, withPoDefaults]);
 
   useEffect(() => {
     if (createdMasterDataRows.length === 0) return;
@@ -2869,10 +3015,10 @@ function ProcurementModule({
     [poRows, poFilters.requestSource, poFilters.projectId, poFilters.departmentId, poStatusFilter],
   );
   const roleAwarePoRows = useMemo(() => {
-    // PO records are shared between Sourcing Officer and Approver.
+    // PO records are shared across sourcing, project, logistics, and approver stakeholders.
     // "All" should always show the combined shared list.
     if (activeRole === "All") return filteredPoRows;
-    if (activeRole === "Sourcing Officer" || activeRole === "Approver") return filteredPoRows;
+    if (activeRole === "Sourcing Officer" || activeRole === "Team Lead" || activeRole === "Logistics Officer" || activeRole === "Approver") return filteredPoRows;
     return [];
   }, [filteredPoRows, activeRole]);
 
@@ -2909,16 +3055,75 @@ function ProcurementModule({
   const createRfqFromPr = useCallback((prRef: string) => {
     const pr = prRows.find((p) => p.ref === prRef);
     if (!pr) return;
-    setRfqCreateFromPr(pr);
-  }, [prRows]);
+    if (!(pr.status === "Pending Sourcing" || pr.status === "In Sourcing" || pr.status === "In Sourcing Process")) {
+      setApprovalNotice(`RFQ can only be created from approved PRs. ${pr.ref} is currently ${pr.status}.`);
+      return;
+    }
+    const createdPr = createdPrs.find((p) => p.ref === pr.ref);
+    const approvedSnapshot = approvedPrItemsByRef[pr.ref];
+    const lineItemsFromSource =
+      approvedSnapshot && approvedSnapshot.length > 0
+        ? approvedSnapshot
+        : (createdPr?.lineItems?.length ?? 0) > (pr.lineItems?.length ?? 0)
+          ? createdPr?.lineItems ?? pr.lineItems
+          : pr.lineItems;
+    const normalizedLineItems = (lineItemsFromSource ?? []).filter((item) => item.name?.trim() || item.quantity?.trim());
+    if (!normalizedLineItems.length) {
+      setApprovalNotice(`Cannot create RFQ from ${pr.ref} because no approved PR line items were found.`);
+      return;
+    }
+    setRfqCreateFromPr({ ...pr, lineItems: normalizedLineItems });
+  }, [approvedPrItemsByRef, createdPrs, prRows]);
+  
+  const createPoFromPr = useCallback((row: PrRow) => {
+    const approvedSnapshot = approvedPrItemsByRef[row.ref];
+    const createdPr = createdPrs.find((p) => p.ref === row.ref);
+    const lineItemsFromSource =
+      approvedSnapshot && approvedSnapshot.length > 0
+        ? approvedSnapshot
+        : (createdPr?.lineItems?.length ?? 0) > (row.lineItems?.length ?? 0)
+          ? createdPr?.lineItems ?? row.lineItems
+          : row.lineItems;
+    setPoCreateSeed({ source: "pr", pr: { ...row, lineItems: lineItemsFromSource } });
+  }, [approvedPrItemsByRef, createdPrs]);
 
-  const updatePrStatus = useCallback((prRef: string, status: string) => {
-    setPrRows((prev) => prev.map((row) => (row.ref === prRef ? { ...row, status } : row)));
+  const createPoFromRfq = useCallback((row: RfqRow) => {
+    const awardedQuote = row.awardedSupplier ? row.quotations.find((q) => q.supplier === row.awardedSupplier) : null;
+    const priceFromAwardedQuote = awardedQuote?.unitPrice ?? 0;
+    const lineItemsFromAwardedRfq = (row.lineItems ?? []).map((line) => ({
+      ...line,
+      price: priceFromAwardedQuote,
+    }));
+    setPoCreateSeed({ source: "rfq", rfq: { ...row, lineItems: lineItemsFromAwardedRfq } });
   }, []);
 
-  const updatePoApproval = useCallback((poId: string, approval: "Pending Approval" | "Approved" | "Rejected") => {
-    setPoRows((prev) => prev.map((row) => (row.po === poId ? { ...row, approval } : row)));
+  const updatePrStatus = useCallback((prRef: string, status: string, owner?: string) => {
+    setPrRows((prev) =>
+      prev.map((row) => (row.ref === prRef ? { ...row, status, ...(owner ? { owner } : {}) } : row)),
+    );
   }, []);
+
+  const updatePoApproval = useCallback(
+    (
+      poId: string,
+      approval: "Pending Approval" | "Approved" | "Rejected",
+      approvalMeta?: { approvedBy?: string; approvedAt?: string },
+    ) => {
+      setPoRows((prev) =>
+        prev.map((row) =>
+          row.po === poId
+            ? {
+                ...row,
+                approval,
+                approvedBy: approval === "Approved" ? approvalMeta?.approvedBy ?? row.approvedBy : undefined,
+                approvedAt: approval === "Approved" ? approvalMeta?.approvedAt ?? row.approvedAt : undefined,
+              }
+            : row,
+        ),
+      );
+    },
+    [],
+  );
 
   const handleSendRfq = useCallback(
     (row: RfqRow) => {
@@ -3008,6 +3213,7 @@ function ProcurementModule({
             <option>Field Engineer</option>
             <option>Team Lead</option>
             <option>Sourcing Officer</option>
+            <option>Logistics Officer</option>
             <option>Approver</option>
           </select>
         </div>
@@ -3632,7 +3838,7 @@ function ProcurementModule({
                                     <DropdownMenuItem onClick={() => updatePrStatus(row.ref, "In Sourcing")}>Accept PR</DropdownMenuItem>
                                   ) : null}
                                   <DropdownMenuItem onClick={() => createRfqFromPr(row.ref)}>Create RFQ</DropdownMenuItem>
-                                  <DropdownMenuItem onClick={() => setPoCreateSeed({ source: "pr", pr: row })}>Proceed to Purchase Order</DropdownMenuItem>
+                                  <DropdownMenuItem onClick={() => createPoFromPr(row)}>Proceed to Purchase Order</DropdownMenuItem>
                                 </DropdownMenuContent>
                               </DropdownMenu>
                             ) : (
@@ -3761,7 +3967,7 @@ function ProcurementModule({
                                 <DropdownMenuItem onClick={() => setCompareModalRfqId(row.rfq)}>Compare & Select</DropdownMenuItem>
                               ) : null}
                               {row.status === "Awarded" ? (
-                                <DropdownMenuItem onClick={() => setPoCreateSeed({ source: "rfq", rfq: row })}>
+                                <DropdownMenuItem onClick={() => createPoFromRfq(row)}>
                                   Proceed to Purchase Order
                                 </DropdownMenuItem>
                               ) : null}
@@ -3977,21 +4183,33 @@ function ProcurementModule({
                             <table className="w-full text-left text-xs">
                               <thead className="bg-muted/50">
                                 <tr>
-                                  <th className="px-3 py-2.5 font-medium">Item</th>
+                                  <th className="px-3 py-2.5 font-medium">Item name</th>
                                   <th className="px-3 py-2.5 font-medium">Qty</th>
+                                  <th className="px-3 py-2.5 font-medium">Unit price</th>
                                   <th className="px-3 py-2.5 font-medium">UOM</th>
+                                  <th className="px-3 py-2.5 font-medium">Total price</th>
                                   <th className="px-3 py-2.5 font-medium">Specification</th>
                                 </tr>
                               </thead>
                               <tbody>
-                                {activeRfq.lineItems.map((line, idx) => (
-                                  <tr key={`${activeRfq.rfq}-line-${idx}`} className="border-t border-border/60">
-                                    <td className="px-3 py-2.5 font-medium text-foreground">{line.name}</td>
-                                    <td className="px-3 py-2.5">{line.quantity}</td>
-                                    <td className="px-3 py-2.5">{line.unit}</td>
-                                    <td className="px-3 py-2.5 text-muted-foreground">{line.specification || "—"}</td>
-                                  </tr>
-                                ))}
+                                {activeRfq.lineItems.map((line, idx) => {
+                                  const parsedUnitPrice = line.specification.match(/Unit Price:\s*([^|]+)/i)?.[1]?.trim() ?? "0";
+                                  const parsedTotalPrice = line.specification.match(/Total Price:\s*([^|]+)/i)?.[1]?.trim() ?? "0";
+                                  const prSpec =
+                                    createdPrs.find((p) => p.ref === activeRfq.prRef)?.lineItems?.[idx]?.specification ??
+                                    prRows.find((p) => p.ref === activeRfq.prRef)?.lineItems?.[idx]?.specification ??
+                                    line.specification;
+                                  return (
+                                    <tr key={`${activeRfq.rfq}-line-${idx}`} className="border-t border-border/60">
+                                      <td className="px-3 py-2.5 font-medium text-foreground">{line.name}</td>
+                                      <td className="px-3 py-2.5">{line.quantity}</td>
+                                      <td className="px-3 py-2.5">{parsedUnitPrice}</td>
+                                      <td className="px-3 py-2.5">{line.unit}</td>
+                                      <td className="px-3 py-2.5">{parsedTotalPrice}</td>
+                                      <td className="px-3 py-2.5 text-muted-foreground">{prSpec || "—"}</td>
+                                    </tr>
+                                  );
+                                })}
                               </tbody>
                             </table>
                           </div>
@@ -4123,20 +4341,38 @@ function ProcurementModule({
                               </Button>
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end" className="w-52">
-                              <DropdownMenuItem
-                                onClick={() => {
-                                  if (row.approval !== "Approved") {
-                                    setApprovalNotice(`Full summary is available for approved purchase orders only. ${row.po} is ${row.approval}.`);
-                                    return;
-                                  }
-                                  setPoSummaryRow(row);
-                                }}
-                              >
+                              <DropdownMenuItem onClick={() => setPoSummaryRow(row)}>
                                 View
                               </DropdownMenuItem>
 
                               {row.approval === "Pending Approval" && activeRole === "Sourcing Officer" ? (
                                 <DropdownMenuItem onClick={() => setPoEditRow(row)}>Edit</DropdownMenuItem>
+                              ) : null}
+
+                              {row.approval === "Pending Approval" && activeRole === "Team Lead" ? (
+                                <DropdownMenuItem
+                                  onClick={() => {
+                                    setPoRows((prev) =>
+                                      prev.map((po) => (po.po === row.po ? { ...po, projectFinalized: true } : po)),
+                                    );
+                                    setApprovalNotice(`Project stakeholder finalized ${row.po}.`);
+                                  }}
+                                >
+                                  Finalize Project
+                                </DropdownMenuItem>
+                              ) : null}
+
+                              {row.approval === "Pending Approval" && activeRole === "Logistics Officer" ? (
+                                <DropdownMenuItem
+                                  onClick={() => {
+                                    setPoRows((prev) =>
+                                      prev.map((po) => (po.po === row.po ? { ...po, logisticsFinalized: true } : po)),
+                                    );
+                                    setApprovalNotice(`Logistics stakeholder finalized ${row.po}.`);
+                                  }}
+                                >
+                                  Finalize Logistics
+                                </DropdownMenuItem>
                               ) : null}
 
                               {row.approval === "Pending Approval" && activeRole === "Approver" ? (
@@ -4338,10 +4574,36 @@ function ProcurementModule({
                       deliveryTime: "",
                       notes: "",
                     };
+                    const itemNameSummary = (row.lineItems ?? []).map((li) => li.name).filter(Boolean).join(", ") || "Item";
+                    const qtySummary = (row.lineItems ?? [])
+                      .reduce((sum, li) => sum + (Number.parseFloat(li.quantity || "0") || 0), 0)
+                      .toLocaleString();
                     return (
                       <div key={supplier} className="space-y-3 rounded-lg border border-border/80 bg-muted/20 p-4">
                         <p className="text-sm font-semibold text-primary">{supplier}</p>
                         <div className="grid gap-2 sm:grid-cols-2">
+                          <div className="space-y-1">
+                            <label className="text-[11px] text-muted-foreground" htmlFor={`ur-${recordQuotationsRfqId}-${supplier}-item`}>
+                              Item name
+                            </label>
+                            <Input
+                              id={`ur-${recordQuotationsRfqId}-${supplier}-item`}
+                              className="h-8"
+                              value={itemNameSummary}
+                              readOnly
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-[11px] text-muted-foreground" htmlFor={`ur-${recordQuotationsRfqId}-${supplier}-qty`}>
+                              Qty
+                            </label>
+                            <Input
+                              id={`ur-${recordQuotationsRfqId}-${supplier}-qty`}
+                              className="h-8"
+                              value={qtySummary}
+                              readOnly
+                            />
+                          </div>
                           <div className="space-y-1">
                             <label className="text-[11px] text-muted-foreground" htmlFor={`ur-${recordQuotationsRfqId}-${supplier}-up`}>
                               Unit price
@@ -4459,9 +4721,13 @@ function ProcurementModule({
                             notes: "",
                           };
                           const up = Number.parseFloat(d.unitPrice);
-                          const tp = Number.parseFloat(d.totalPrice);
-                          if (!d.currency?.trim() || !d.deliveryDate?.trim() || !d.deliveryTime?.trim() || Number.isNaN(up) || up <= 0 || Number.isNaN(tp) || tp <= 0) {
-                            setRecordQuotationError("Enter unit price, total price, currency, delivery date, and delivery time for every supplier.");
+                          const qtyFromRfq = (row.lineItems ?? []).reduce(
+                            (sum, li) => sum + (Number.parseFloat(li.quantity || "0") || 0),
+                            0,
+                          );
+                          const tp = qtyFromRfq * up;
+                          if (!d.currency?.trim() || !d.deliveryDate?.trim() || !d.deliveryTime?.trim() || Number.isNaN(up) || up <= 0 || tp <= 0) {
+                            setRecordQuotationError("Enter unit price, currency, delivery date, and delivery time for every supplier.");
                             return;
                           }
                           out.push({
@@ -4510,16 +4776,39 @@ function ProcurementModule({
               <p className="text-muted-foreground">Record supplier quotations first to compare offers.</p>
             ) : (
               <>
-                <p className="text-[11px] text-muted-foreground">
-                  Supplier quotes below are ranked by quoted total and compared against the RFQ baseline.
-                </p>
+                {(() => {
+                  const prRef = compareModalRfq?.prRef ?? "";
+                  const fromCreatedPr = createdPrs.find((p) => p.ref === prRef)?.baselineTotal;
+                  const fromPrRow = prRows.find((p) => p.ref === prRef)?.baselineTotal;
+                  const prTotalPrice = fromCreatedPr ?? fromPrRow ?? compareModalRfq?.baselineTotal ?? 0;
+                  return (
+                    <p className="text-[11px] text-muted-foreground">
+                      Supplier quotes below are ranked by quoted total and compared against PR total price.
+                    </p>
+                  );
+                })()}
                 <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                   {compareSortedQuotes.map((q) => {
                     const isBest = compareBestSupplier && q.supplier === compareBestSupplier;
-                    const baseline = compareModalRfq?.baselineTotal ?? 0;
-                    const savings = Math.max(0, baseline - q.totalPrice);
-                    const marginPct = baseline > 0 ? (savings / baseline) * 100 : 0;
+                    const prRef = compareModalRfq?.prRef ?? "";
+                    const fromCreatedPr = createdPrs.find((p) => p.ref === prRef)?.baselineTotal;
+                    const fromPrRow = prRows.find((p) => p.ref === prRef)?.baselineTotal;
+                    const prTotalPrice = fromCreatedPr ?? fromPrRow ?? compareModalRfq?.baselineTotal ?? 0;
+                    const prItems =
+                      createdPrs.find((p) => p.ref === prRef)?.lineItems ??
+                      prRows.find((p) => p.ref === prRef)?.lineItems ??
+                      compareModalRfq?.lineItems ??
+                      [];
+                    const savings = Math.max(0, prTotalPrice - q.totalPrice);
+                    const marginPct = prTotalPrice > 0 ? (savings / prTotalPrice) * 100 : 0;
                     const supplierType = /(global|tech|international|offshore)/i.test(q.supplier) ? "Offshore" : "Local";
+                    const itemNameSummary = prItems.map((li) => li.name).filter(Boolean).join(", ") || "Item";
+                    const qtyValue = prItems
+                      .reduce((sum, li) => sum + (Number.parseFloat(li.quantity || "0") || 0), 0)
+                    const qtySummary = qtyValue.toLocaleString();
+                    const quotedTotal = qtyValue * q.unitPrice;
+                    const isHighCost = quotedTotal > prTotalPrice;
+                    const costLabel = isHighCost ? "High Cost" : "Low Cost";
                     return (
                       <div
                         key={`${compareModalRfqId}-${q.supplier}`}
@@ -4543,8 +4832,13 @@ function ProcurementModule({
                                 {supplierType}
                               </span>
                               {isBest ? (
-                                <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-800">
-                                  Lowest cost
+                                <span
+                                  className={cn(
+                                    "rounded-full px-1.5 py-0.5 text-[10px] font-semibold",
+                                    isHighCost ? "bg-red-100 text-red-800" : "bg-emerald-100 text-emerald-800",
+                                  )}
+                                >
+                                  {costLabel}
                                 </span>
                               ) : null}
                             </div>
@@ -4562,16 +4856,24 @@ function ProcurementModule({
 
                         <dl className="space-y-1 text-[11px]">
                           <div className="flex items-center justify-between border-t border-border/60 pt-1.5">
+                            <dt className="text-muted-foreground">Item name</dt>
+                            <dd className="max-w-[58%] truncate text-right font-semibold text-foreground">{itemNameSummary}</dd>
+                          </div>
+                          <div className="flex items-center justify-between border-t border-border/60 pt-1.5">
+                            <dt className="text-muted-foreground">Qty</dt>
+                            <dd className="font-semibold text-foreground">{qtySummary}</dd>
+                          </div>
+                          <div className="flex items-center justify-between border-t border-border/60 pt-1.5">
                             <dt className="text-muted-foreground">Unit price</dt>
                             <dd className="font-semibold text-foreground">{q.unitPrice.toLocaleString()} {q.currency}</dd>
                           </div>
                           <div className="flex items-center justify-between border-t border-border/60 pt-1.5">
                             <dt className="text-muted-foreground">Quoted total</dt>
-                            <dd className="font-semibold text-foreground">{q.totalPrice.toLocaleString()} {q.currency}</dd>
+                            <dd className="font-semibold text-foreground">{quotedTotal.toLocaleString()} {q.currency}</dd>
                           </div>
                           <div className="flex items-center justify-between border-t border-border/60 pt-1.5">
-                            <dt className="text-muted-foreground">BOQ baseline</dt>
-                            <dd className="font-semibold text-foreground">{baseline.toLocaleString()} USD</dd>
+                            <dt className="text-muted-foreground">PR total price</dt>
+                            <dd className="font-semibold text-foreground">{prTotalPrice.toLocaleString()} USD</dd>
                           </div>
                           <div className="flex items-center justify-between border-t border-border/60 pt-1.5">
                             <dt className="text-muted-foreground">Currency</dt>
@@ -4579,7 +4881,7 @@ function ProcurementModule({
                           </div>
                           <div className="flex items-center justify-between border-t border-border/60 pt-1.5">
                             <dt className="text-muted-foreground">Margin %</dt>
-                            <dd className="font-semibold text-emerald-800">{marginPct.toFixed(2)}%</dd>
+                            <dd className={cn("font-semibold", isHighCost ? "text-red-700" : "text-emerald-800")}>{marginPct.toFixed(2)}%</dd>
                           </div>
                           <div className="flex items-center justify-between border-t border-border/60 pt-1.5">
                             <dt className="text-muted-foreground">Delivery time</dt>
@@ -4655,6 +4957,8 @@ function ProcurementModule({
                       prRef: poCreateSeed.rfq.prRef,
                       rfqRef: poCreateSeed.rfq.rfq,
                       supplier: poCreateSeed.rfq.awardedSupplier ?? null,
+                      deliveryTerms: poCreateSeed.rfq.deliveryTimeline || DEFAULT_PO_DELIVERY_TERMS,
+                      paymentTerms: poCreateSeed.rfq.terms || DEFAULT_PO_PAYMENT_TERMS,
                       orderTitle: `${poCreateSeed.rfq.title} — ${poCreateSeed.rfq.rfq}`,
                       lineItems: poCreateSeed.rfq.lineItems,
                     }
@@ -4689,6 +4993,16 @@ function ProcurementModule({
                 rfqRef: null,
                 supplier: poEditRow.supplier,
                 approval: poEditRow.approval,
+                paymentMode: poEditRow.paymentMode,
+                paymentTermsLabel: poEditRow.paymentTermsLabel,
+                incoterm: poEditRow.incoterm,
+                advancePayment: poEditRow.advancePayment,
+                shipmentMode: poEditRow.shipmentMode,
+                loadingOrigin: poEditRow.loadingOrigin,
+                portOfLoading: poEditRow.portOfLoading,
+                destination: poEditRow.destination,
+                partialShipment: poEditRow.partialShipment,
+                transshipment: poEditRow.transshipment,
                 orderTitle: `${poEditRow.requestType} order`,
               }}
               onClose={() => setPoEditRow(null)}
@@ -4708,6 +5022,16 @@ function ProcurementModule({
                           totalAmount: record.totalAmount,
                           deliveryTerms: record.deliveryTerms,
                           paymentTerms: record.paymentTerms,
+                          paymentMode: record.paymentMode,
+                          paymentTermsLabel: record.paymentTermsLabel,
+                          incoterm: record.incoterm,
+                          advancePayment: record.advancePayment,
+                          shipmentMode: record.shipmentMode,
+                          loadingOrigin: record.loadingOrigin,
+                          portOfLoading: record.portOfLoading,
+                          destination: record.destination,
+                          partialShipment: record.partialShipment,
+                          transshipment: record.transshipment,
                         }
                       : row,
                   ),
@@ -4735,8 +5059,23 @@ function ProcurementModule({
                 type="button"
                 className="h-8"
                 onClick={() => {
-                  updatePoApproval(poApproveTarget.po, "Approved");
-                  setApprovalNotice(`${poApproveTarget.po} approved.`);
+                  const targetPo = poApproveTarget?.po;
+                  if (!targetPo) return;
+                  if (activeRole !== "Approver") {
+                    setApprovalNotice("Only Approver can approve purchase orders.");
+                    return;
+                  }
+                  const approvedAt = new Date().toISOString();
+                  updatePoApproval(targetPo, "Approved", {
+                    approvedBy: "Approver",
+                    approvedAt,
+                  });
+                  setPoSummaryRow((prev) =>
+                    prev && prev.po === targetPo
+                      ? { ...prev, approval: "Approved", approvedBy: "Approver", approvedAt }
+                      : prev,
+                  );
+                  setApprovalNotice(`${targetPo} approved by Approver.`);
                   setPoApproveTarget(null);
                 }}
               >
@@ -4788,8 +5127,8 @@ function ProcurementModule({
           <div className="no-scrollbar max-h-[min(92vh,760px)] w-full max-w-4xl space-y-4 overflow-y-auto rounded-lg border bg-card p-5 text-xs shadow-lg">
             <div className="flex items-center justify-between gap-2">
               <div className="space-y-1">
-                <h3 className="text-sm font-semibold">Purchase Order Summary · {poSummaryRow.po}</h3>
-                <p className="text-muted-foreground">Approved order snapshot for project, sourcing, logistics, and approval status.</p>
+                <h3 className="text-sm font-semibold">PO Status</h3>
+                <p className="text-muted-foreground">Status, project, sourcing, logistics, and approval snapshot.</p>
               </div>
               <Button variant="ghost" size="icon-sm" onClick={() => setPoSummaryRow(null)} aria-label="Close modal">
                 <X className="h-4 w-4" />
@@ -4798,39 +5137,50 @@ function ProcurementModule({
 
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <div className="rounded-md border bg-muted/20 p-3">
+                <p className="text-[11px] text-muted-foreground">Status</p>
+                <p className="font-semibold text-foreground">{poSummaryRow.approval}</p>
+              </div>
+              <div className="rounded-md border bg-muted/20 p-3">
                 <p className="text-[11px] text-muted-foreground">Project</p>
                 <p className="font-semibold text-foreground">
-                  {poSummaryRow.sourceKind === "project"
-                    ? MODULE_FILTER_PROJECT_OPTIONS.find((p) => p.value === poSummaryRow.projectKey)?.label ?? "Project linked"
-                    : MODULE_FILTER_DEPARTMENT_OPTIONS.find((d) => d.value === poSummaryRow.departmentKey)?.label ?? "Department linked"}
+                  {poSummaryRow.projectName ?? "Abay Bank Cisco ISE"}
                 </p>
-                <p className="mt-1 text-[11px] text-muted-foreground">Source: {poSummaryRow.orderSource}</p>
               </div>
               <div className="rounded-md border bg-muted/20 p-3">
                 <p className="text-[11px] text-muted-foreground">Sourcing</p>
-                <p className="font-semibold text-foreground">Sourcing Completed</p>
-                <p className="mt-1 text-[11px] text-muted-foreground">Supplier: {poSummaryRow.supplier}</p>
+                <p className="font-semibold text-foreground">{poSummaryRow.sourcingPerson ?? "Bete Zerihun"}</p>
               </div>
               <div className="rounded-md border bg-muted/20 p-3">
                 <p className="text-[11px] text-muted-foreground">Logistics</p>
-                <p className="font-semibold text-foreground">
-                  {(poSummaryRow.lineItems ?? []).some((li) => li.deliveryDate) ? "Delivery Scheduled" : "Planning in Progress"}
-                </p>
-                <p className="mt-1 text-[11px] text-muted-foreground">
-                  {(poSummaryRow.lineItems ?? []).some((li) => li.deliveryDate)
-                    ? `Earliest: ${(poSummaryRow.lineItems ?? [])
-                        .filter((li) => li.deliveryDate)
-                        .map((li) => li.deliveryDate)
-                        .sort()[0]}`
-                    : "No delivery date yet"}
-                </p>
-              </div>
-              <div className="rounded-md border bg-muted/20 p-3">
-                <p className="text-[11px] text-muted-foreground">Approval</p>
-                <div className="mt-1"><StatusBadge value={poSummaryRow.approval} /></div>
-                <p className="mt-2 text-[11px] text-muted-foreground">Workflow stage: Final Approval</p>
+                <p className="font-semibold text-foreground">{poSummaryRow.logisticsPerson ?? "Yonatan Mesfin"}</p>
               </div>
             </div>
+            <div className="rounded-md border bg-background px-3 py-2 text-[11px] text-muted-foreground">
+              Finalization - Project: {poSummaryRow.projectFinalized ? "Completed" : "Pending"} | Logistics:{" "}
+              {poSummaryRow.logisticsFinalized ? "Completed" : "Pending"} | Approval:{" "}
+              {poSummaryRow.approvedBy ? `${poSummaryRow.approvedBy}${poSummaryRow.approvedAt ? ` (${new Date(poSummaryRow.approvedAt).toLocaleDateString()})` : ""}` : "Pending"}
+            </div>
+
+            {(() => {
+              const linkedRfq =
+                (poSummaryRow.rfqRef ? rfqRows.find((r) => r.rfq === poSummaryRow.rfqRef) : null) ??
+                (poSummaryRow.prRef ? rfqRows.find((r) => r.prRef === poSummaryRow.prRef && r.status === "Awarded") : null) ??
+                null;
+              return linkedRfq ? (
+                <div className="rounded-md border bg-background px-3 py-3 text-[11px]">
+                  <p className="mb-2 text-xs font-semibold text-foreground">Approved RFQ Information</p>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <p><span className="text-muted-foreground">RFQ Ref:</span> {linkedRfq.rfq}</p>
+                    <p><span className="text-muted-foreground">Status:</span> {linkedRfq.status}</p>
+                    <p><span className="text-muted-foreground">Title:</span> {linkedRfq.title}</p>
+                    <p><span className="text-muted-foreground">Deadline:</span> {linkedRfq.deadline}</p>
+                    <p><span className="text-muted-foreground">Delivery Timeline:</span> {linkedRfq.deliveryTimeline || "—"}</p>
+                    <p><span className="text-muted-foreground">Awarded Supplier:</span> {linkedRfq.awardedSupplier ?? "—"}</p>
+                    <p className="sm:col-span-2"><span className="text-muted-foreground">Terms:</span> {linkedRfq.terms || "—"}</p>
+                  </div>
+                </div>
+              ) : null;
+            })()}
 
             <div className="space-y-3 rounded-md border border-border/70 bg-muted/20 p-4">
               <div className="grid gap-3 sm:grid-cols-2">
@@ -4855,17 +5205,34 @@ function ProcurementModule({
                     </tr>
                   </thead>
                   <tbody>
-                    {(poSummaryRow.lineItems?.length
-                      ? poSummaryRow.lineItems
-                      : [{ name: poSummaryRow.requestType, quantity: "1", price: 0, deliveryDate: "" }]
-                    ).map((li, idx) => (
-                      <tr key={`${poSummaryRow.po}-summary-line-${idx}`} className="border-t border-border/60">
-                        <td className="px-3 py-2">{li.name}</td>
-                        <td className="px-3 py-2">{li.quantity}</td>
-                        <td className="px-3 py-2">{li.price.toLocaleString()}</td>
-                        <td className="px-3 py-2">{li.deliveryDate || "—"}</td>
-                      </tr>
-                    ))}
+                    {(() => {
+                      const linkedRfq =
+                        (poSummaryRow.rfqRef ? rfqRows.find((r) => r.rfq === poSummaryRow.rfqRef) : null) ??
+                        (poSummaryRow.prRef ? rfqRows.find((r) => r.prRef === poSummaryRow.prRef && r.status === "Awarded") : null) ??
+                        null;
+                      const awardedQuote = linkedRfq?.awardedSupplier
+                        ? linkedRfq.quotations.find((q) => q.supplier === linkedRfq.awardedSupplier)
+                        : null;
+                      const sourceRows =
+                        linkedRfq?.lineItems?.length
+                          ? linkedRfq.lineItems.map((li) => ({
+                              name: li.name,
+                              quantity: li.quantity,
+                              price: awardedQuote?.unitPrice ?? 0,
+                              deliveryDate: awardedQuote?.deliveryDate ?? "",
+                            }))
+                          : poSummaryRow.lineItems?.length
+                            ? poSummaryRow.lineItems
+                            : [];
+                      return sourceRows.map((li, idx) => (
+                        <tr key={`${poSummaryRow.po}-summary-line-${idx}`} className="border-t border-border/60">
+                          <td className="px-3 py-2">{li.name}</td>
+                          <td className="px-3 py-2">{li.quantity}</td>
+                          <td className="px-3 py-2">{li.price.toLocaleString()}</td>
+                          <td className="px-3 py-2">{li.deliveryDate || "—"}</td>
+                        </tr>
+                      ));
+                    })()}
                   </tbody>
                 </table>
               </div>
@@ -4880,13 +5247,53 @@ function ProcurementModule({
                   <p className="font-medium text-foreground">{poSummaryRow.paymentTerms ?? DEFAULT_PO_PAYMENT_TERMS}</p>
                 </div>
                 <div className="sm:col-span-2">
-                  <p className="text-[11px] text-muted-foreground">Total Amount</p>
-                  <p className="text-sm font-semibold text-foreground">{(poSummaryRow.totalAmount ?? 0).toLocaleString()} USD</p>
+                  <p className="text-[11px] text-muted-foreground">Total PO Subtotal</p>
+                  <p className="text-sm font-semibold text-foreground">
+                    {(poSummaryRow.totalAmount ?? 93_594.39).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </p>
                 </div>
+              </div>
+              <div className="grid gap-2 border-t pt-3 text-[11px]">
+                <p className="font-semibold text-foreground">Payment & Shipment</p>
+                <p><span className="text-muted-foreground">Mode of payment:</span> {poSummaryRow.paymentMode ?? "PDC"}</p>
+                <p><span className="text-muted-foreground">Terms of payment:</span> {poSummaryRow.paymentTermsLabel ?? "Net 60 Days"}</p>
+                <p><span className="text-muted-foreground">Incoterm:</span> {poSummaryRow.incoterm ?? "FOB - Free On Board"}</p>
+                <p><span className="text-muted-foreground">Advance payment:</span> {poSummaryRow.advancePayment ?? "0%"}</p>
+                <p><span className="text-muted-foreground">Mode of shipment:</span> {poSummaryRow.shipmentMode ?? "Air"}</p>
+                <p><span className="text-muted-foreground">Loading origin:</span> {poSummaryRow.loadingOrigin ?? "United Arab Emirates"}</p>
+                <p><span className="text-muted-foreground">Port of loading:</span> {poSummaryRow.portOfLoading ?? "Dubai"}</p>
+                <p><span className="text-muted-foreground">Destination:</span> {poSummaryRow.destination ?? "Addis Ababa"}</p>
+                <p><span className="text-muted-foreground">Partial shipment:</span> {poSummaryRow.partialShipment ?? "Allowed"}</p>
+                <p><span className="text-muted-foreground">Transshipment:</span> {poSummaryRow.transshipment ?? "Allowed"}</p>
               </div>
             </div>
 
             <div className="flex justify-end">
+              {poSummaryRow.approval === "Pending Approval" && activeRole === "Approver" ? (
+                <div className="mr-auto flex items-center gap-2">
+                  <Button
+                    type="button"
+                    className="h-8 min-w-24"
+                    onClick={() => {
+                      setPoApproveTarget(poSummaryRow);
+                      setPoSummaryRow(null);
+                    }}
+                  >
+                    Approve
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    className="h-8 min-w-24"
+                    onClick={() => {
+                      setPoRejectTarget(poSummaryRow);
+                      setPoRejectReason("");
+                    }}
+                  >
+                    Reject
+                  </Button>
+                </div>
+              ) : null}
               <Button type="button" variant="outline" className="h-8" onClick={() => setPoSummaryRow(null)}>
                 Close
               </Button>
@@ -5400,10 +5807,11 @@ function ProcurementModule({
                   className="h-8 min-w-24"
                   onClick={() => {
                     const ref = prDecisionModal.row.ref;
-                    updatePrStatus(ref, "Pending Sourcing");
+                    updatePrStatus(ref, "Pending Sourcing", "David Kim");
+                    setApprovedPrItemsByRef((prev) => ({ ...prev, [ref]: prDecisionModal.row.lineItems }));
                     setApprovalNotice(`${ref} approved. Next action: Sourcing Officer.`);
                     setPrDecisionModal(null);
-                    setPrDetailRow((r) => (r?.ref === ref ? { ...r, status: "Pending Sourcing" } : r));
+                    setPrDetailRow((r) => (r?.ref === ref ? { ...r, status: "Pending Sourcing", owner: "David Kim" } : r));
                   }}
                 >
                   Confirm
@@ -7293,8 +7701,8 @@ function ProjectModule() {
                           <Button type="button" variant="ghost" size="icon" className="h-8 w-8" onClick={() => openViewModal(project)}>
                             <Eye className="h-4 w-4" />
                           </Button>
-                          <TableEditIconButton onClick={() => openEditModal(project)} />
-                          <TableDeleteIconButton onClick={() => onDeleteProject(project)} />
+                          <TableEditIconButton onClick={() => openEditModal(project)} {...{ "aria-label": `Edit ${project.projectName}` }} />
+                          <TableDeleteIconButton onClick={() => onDeleteProject(project)} {...{ "aria-label": `Delete ${project.projectName}` }} />
                         </div>
                       </td>
                     </tr>
@@ -8375,7 +8783,7 @@ export default function Home() {
           {activeModule === "Sourcing" && <SourcingModule />}
           {activeModule === "Inventory" && <InventoryModule />}
           {activeModule === "Budget" && <BudgetModule />}
-          {activeModule === "Approvals" && (
+          {activeModule === "Settings" && (
             <ApprovalsWorkflowModule
               rules={workflowRules}
               setRules={setWorkflowRules}

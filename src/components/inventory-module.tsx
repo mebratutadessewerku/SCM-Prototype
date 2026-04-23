@@ -1309,18 +1309,6 @@ export function InventoryModule() {
               </select>
             </div>
             <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button type="button" variant="outline" size="sm" className="h-9">
-                    New transaction
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-48">
-                  <DropdownMenuItem onClick={() => openMovementModal("receive")}>Inbound</DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => openMovementModal("issue")}>Outbound</DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => openMovementModal("transfer")}>Internal (movement)</DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
               <Button
                 type="button"
                 size="sm"
@@ -1423,7 +1411,8 @@ export function InventoryModule() {
 
       {tab === "Transaction" && (
         <div className="space-y-6">
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
             <select className={filterSelect} value={movTypeFilter} onChange={(e) => setMovTypeFilter(e.target.value)}>
               <option value="All">All transaction types</option>
               <option value="In">In</option>
@@ -1450,6 +1439,21 @@ export function InventoryModule() {
                 value={movSearch}
                 onChange={(e) => setMovSearch(e.target.value)}
               />
+            </div>
+            </div>
+            <div className="flex shrink-0 flex-wrap items-center gap-2">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button type="button" variant="outline" size="sm" className="h-9">
+                    New transaction
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-48">
+                  <DropdownMenuItem onClick={() => openMovementModal("receive")}>Inbound</DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => openMovementModal("issue")}>Outbound</DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => openMovementModal("transfer")}>Internal (movement)</DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
           </div>
 
