@@ -11,7 +11,7 @@ import * as XLSX from "xlsx";
 
 const PRIMARY = "#0D9488";
 
-type InventoryTab = "Overview" | "Stock" | "Transaction" | "Requested" | "Returned";
+type InventoryTab = "Overview" | "Stock" | "Transaction" | "Requested" | "Returned" | "GRN";
 
 type InvLocationType = "Warehouse" | "Site" | "Bin";
 
@@ -149,7 +149,7 @@ function InventoryTabs({
   onTab: (t: InventoryTab) => void;
   onOpenSettings: () => void;
 }) {
-  const items: InventoryTab[] = ["Overview", "Stock", "Transaction", "Requested", "Returned"];
+  const items: InventoryTab[] = ["Overview", "Stock", "Transaction", "Requested", "Returned", "GRN"];
   return (
     <div className="flex flex-wrap items-center justify-between gap-3 border-b border-transparent">
       <div className="flex flex-wrap gap-8">
@@ -1644,6 +1644,47 @@ export function InventoryModule() {
                       </tr>
                     );
                   })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {tab === "GRN" && (
+        <div className="space-y-6">
+          <div className="overflow-x-auto rounded-lg bg-card shadow-sm ring-1 ring-slate-100/80">
+            <table className="w-full min-w-[860px] text-left text-xs">
+              <thead>
+                <tr className="text-muted-foreground">
+                  <th className="px-4 py-3 font-medium">GRN ID</th>
+                  <th className="px-4 py-3 font-medium">Item Name</th>
+                  <th className="px-4 py-3 font-medium">Received Quantity</th>
+                  <th className="px-4 py-3 font-medium">To Location</th>
+                  <th className="px-4 py-3 font-medium">Date</th>
+                  <th className="px-4 py-3 font-medium">Reference</th>
+                </tr>
+              </thead>
+              <tbody>
+                {movements.filter((m) => m.type === "In").length === 0 ? (
+                  <tr>
+                    <td className="px-4 py-8 text-center text-muted-foreground" colSpan={6}>
+                      No GRN records yet.
+                    </td>
+                  </tr>
+                ) : (
+                  movements
+                    .filter((m) => m.type === "In")
+                    .map((row) => (
+                      <tr key={row.id} className="border-t border-border/60">
+                        <td className="px-4 py-3 font-mono text-[11px] text-foreground">GRN-{row.id}</td>
+                        <td className="px-4 py-3 font-medium text-foreground">{row.itemName}</td>
+                        <td className="px-4 py-3 tabular-nums">{row.quantity}</td>
+                        <td className="px-4 py-3 text-muted-foreground">{invLocName(locations, row.toLocationId)}</td>
+                        <td className="px-4 py-3 text-muted-foreground">{row.date}</td>
+                        <td className="px-4 py-3 text-muted-foreground">{row.reference}</td>
+                      </tr>
+                    ))
                 )}
               </tbody>
             </table>

@@ -2642,6 +2642,7 @@ function ProcurementModule({
   const [poRejectReason, setPoRejectReason] = useState("");
   const [poEditRow, setPoEditRow] = useState<PoRow | null>(null);
   const [poGenerateRow, setPoGenerateRow] = useState<PoRow | null>(null);
+  const [poSummaryRow, setPoSummaryRow] = useState<PoRow | null>(null);
   const [masterDataRows, setMasterDataRows] = useState<ItemMasterRow[]>([
     { id: "md-1", itemName: "Cast Iron Valve", prm: "Sarah Smith", subSolutions: ["Valve Assembly", "Pressure Control"] },
     { id: "md-2", itemName: "Packing Tape", prm: "Alex Johnson", subSolutions: ["Warehouse Packaging"] },
@@ -4122,7 +4123,15 @@ function ProcurementModule({
                               </Button>
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end" className="w-52">
-                              <DropdownMenuItem onClick={() => setApprovalNotice(`Viewing ${row.po} (${row.approval}).`)}>
+                              <DropdownMenuItem
+                                onClick={() => {
+                                  if (row.approval !== "Approved") {
+                                    setApprovalNotice(`Full summary is available for approved purchase orders only. ${row.po} is ${row.approval}.`);
+                                    return;
+                                  }
+                                  setPoSummaryRow(row);
+                                }}
+                              >
                                 View
                               </DropdownMenuItem>
 
@@ -4768,6 +4777,118 @@ function ProcurementModule({
                 }}
               >
                 Submit rejection
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {poSummaryRow ? (
+        <div className="fixed inset-0 z-[65] flex items-center justify-center bg-black/30 p-4">
+          <div className="no-scrollbar max-h-[min(92vh,760px)] w-full max-w-4xl space-y-4 overflow-y-auto rounded-lg border bg-card p-5 text-xs shadow-lg">
+            <div className="flex items-center justify-between gap-2">
+              <div className="space-y-1">
+                <h3 className="text-sm font-semibold">Purchase Order Summary · {poSummaryRow.po}</h3>
+                <p className="text-muted-foreground">Approved order snapshot for project, sourcing, logistics, and approval status.</p>
+              </div>
+              <Button variant="ghost" size="icon-sm" onClick={() => setPoSummaryRow(null)} aria-label="Close modal">
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <div className="rounded-md border bg-muted/20 p-3">
+                <p className="text-[11px] text-muted-foreground">Project</p>
+                <p className="font-semibold text-foreground">
+                  {poSummaryRow.sourceKind === "project"
+                    ? MODULE_FILTER_PROJECT_OPTIONS.find((p) => p.value === poSummaryRow.projectKey)?.label ?? "Project linked"
+                    : MODULE_FILTER_DEPARTMENT_OPTIONS.find((d) => d.value === poSummaryRow.departmentKey)?.label ?? "Department linked"}
+                </p>
+                <p className="mt-1 text-[11px] text-muted-foreground">Source: {poSummaryRow.orderSource}</p>
+              </div>
+              <div className="rounded-md border bg-muted/20 p-3">
+                <p className="text-[11px] text-muted-foreground">Sourcing</p>
+                <p className="font-semibold text-foreground">Sourcing Completed</p>
+                <p className="mt-1 text-[11px] text-muted-foreground">Supplier: {poSummaryRow.supplier}</p>
+              </div>
+              <div className="rounded-md border bg-muted/20 p-3">
+                <p className="text-[11px] text-muted-foreground">Logistics</p>
+                <p className="font-semibold text-foreground">
+                  {(poSummaryRow.lineItems ?? []).some((li) => li.deliveryDate) ? "Delivery Scheduled" : "Planning in Progress"}
+                </p>
+                <p className="mt-1 text-[11px] text-muted-foreground">
+                  {(poSummaryRow.lineItems ?? []).some((li) => li.deliveryDate)
+                    ? `Earliest: ${(poSummaryRow.lineItems ?? [])
+                        .filter((li) => li.deliveryDate)
+                        .map((li) => li.deliveryDate)
+                        .sort()[0]}`
+                    : "No delivery date yet"}
+                </p>
+              </div>
+              <div className="rounded-md border bg-muted/20 p-3">
+                <p className="text-[11px] text-muted-foreground">Approval</p>
+                <div className="mt-1"><StatusBadge value={poSummaryRow.approval} /></div>
+                <p className="mt-2 text-[11px] text-muted-foreground">Workflow stage: Final Approval</p>
+              </div>
+            </div>
+
+            <div className="space-y-3 rounded-md border border-border/70 bg-muted/20 p-4">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div>
+                  <p className="text-[11px] text-muted-foreground">PO Number</p>
+                  <p className="font-semibold text-foreground">{poSummaryRow.po}</p>
+                </div>
+                <div>
+                  <p className="text-[11px] text-muted-foreground">Request Type</p>
+                  <p className="font-semibold text-foreground">{poSummaryRow.requestType}</p>
+                </div>
+              </div>
+
+              <div className="overflow-hidden rounded-md border border-border/70 bg-card">
+                <table className="w-full text-left text-[11px]">
+                  <thead className="bg-muted/40">
+                    <tr>
+                      <th className="px-3 py-2">Line Item</th>
+                      <th className="px-3 py-2">Quantity</th>
+                      <th className="px-3 py-2">Price</th>
+                      <th className="px-3 py-2">Delivery Date</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(poSummaryRow.lineItems?.length
+                      ? poSummaryRow.lineItems
+                      : [{ name: poSummaryRow.requestType, quantity: "1", price: 0, deliveryDate: "" }]
+                    ).map((li, idx) => (
+                      <tr key={`${poSummaryRow.po}-summary-line-${idx}`} className="border-t border-border/60">
+                        <td className="px-3 py-2">{li.name}</td>
+                        <td className="px-3 py-2">{li.quantity}</td>
+                        <td className="px-3 py-2">{li.price.toLocaleString()}</td>
+                        <td className="px-3 py-2">{li.deliveryDate || "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div>
+                  <p className="text-[11px] text-muted-foreground">Delivery Terms</p>
+                  <p className="font-medium text-foreground">{poSummaryRow.deliveryTerms ?? DEFAULT_PO_DELIVERY_TERMS}</p>
+                </div>
+                <div>
+                  <p className="text-[11px] text-muted-foreground">Payment Terms</p>
+                  <p className="font-medium text-foreground">{poSummaryRow.paymentTerms ?? DEFAULT_PO_PAYMENT_TERMS}</p>
+                </div>
+                <div className="sm:col-span-2">
+                  <p className="text-[11px] text-muted-foreground">Total Amount</p>
+                  <p className="text-sm font-semibold text-foreground">{(poSummaryRow.totalAmount ?? 0).toLocaleString()} USD</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end">
+              <Button type="button" variant="outline" className="h-8" onClick={() => setPoSummaryRow(null)}>
+                Close
               </Button>
             </div>
           </div>
@@ -6793,16 +6914,32 @@ const createEmptyProjectForm = (): ProjectFormValues => ({
 
 function ProjectModule() {
   type ProjectModalMode = "create" | "view" | "edit";
+  type ProjectCostSection = "boq" | "budget";
+  type BoqCategory = "Local Material" | "Product" | "Service" | "Training";
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [modalMode, setModalMode] = useState<ProjectModalMode>("create");
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [form, setForm] = useState<ProjectFormValues>(createEmptyProjectForm());
   const [formError, setFormError] = useState<string | null>(null);
   const [projects, setProjects] = useState<ProjectRecord[]>([]);
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const [costSection, setCostSection] = useState<ProjectCostSection>("boq");
+  const [boqCategoryFilter, setBoqCategoryFilter] = useState<"All" | BoqCategory>("All");
   const [boqNotice, setBoqNotice] = useState<string | null>(null);
   const [boqByProject, setBoqByProject] = useState<Record<string, Array<Record<string, string | number>>>>({});
   const boqUploadInputRef = useRef<HTMLInputElement | null>(null);
   const readOnly = modalMode === "view";
+  const boqCategoryOptions: BoqCategory[] = ["Local Material", "Product", "Service", "Training"];
+
+  const selectedProject = useMemo(
+    () => projects.find((project) => project.id === selectedProjectId) ?? null,
+    [projects, selectedProjectId],
+  );
+
+  const selectedProjectBoqRows = useMemo(
+    () => (selectedProjectId ? boqByProject[selectedProjectId] ?? [] : []),
+    [boqByProject, selectedProjectId],
+  );
 
   const resetForm = useCallback(() => {
     setForm(createEmptyProjectForm());
@@ -6880,12 +7017,62 @@ function ProjectModule() {
   const onDeleteProject = useCallback((project: ProjectRecord) => {
     if (!window.confirm(`Delete project "${project.projectName}"?`)) return;
     setProjects((prev) => prev.filter((row) => row.id !== project.id));
+    setSelectedProjectId((prev) => (prev === project.id ? null : prev));
     setBoqByProject((prev) => {
       const next = { ...prev };
       delete next[project.id];
       return next;
     });
   }, []);
+
+  const parseNumericCell = useCallback((row: Record<string, string | number>, keys: string[]) => {
+    for (const key of keys) {
+      const value = row[key];
+      if (typeof value === "number" && Number.isFinite(value)) return value;
+      if (typeof value === "string") {
+        const cleaned = value.replace(/[, $]/g, "").trim();
+        const parsed = Number(cleaned);
+        if (Number.isFinite(parsed)) return parsed;
+      }
+    }
+    return 0;
+  }, []);
+
+  const projectBoqComputedRows = useMemo(() => {
+    return selectedProjectBoqRows.map((row, idx) => {
+      const quantity = parseNumericCell(row, ["Quantity", "Qty"]);
+      const unitPrice = parseNumericCell(row, ["Unit Price", "GPT. Unit Cost", "Discounted Unit Cost"]);
+      const totalPrice = parseNumericCell(row, ["Total Price", "GPT. Total Cost"]) || quantity * unitPrice;
+      const discountedCosts = parseNumericCell(row, ["Discounted Total Cost"]) || totalPrice;
+      const usedAmount = parseNumericCell(row, ["Used Amount"]);
+      const remainingAmount = Math.max(0, discountedCosts - usedAmount);
+      const rawCategory = String(row["Category"] ?? row["Item Category"] ?? "").trim();
+      const inferredCategory: BoqCategory =
+        rawCategory === "Local Material" || rawCategory === "Product" || rawCategory === "Service" || rawCategory === "Training"
+          ? rawCategory
+          : "Product";
+      const status = remainingAmount === 0 ? "Completed" : usedAmount > 0 ? "In Progress" : "Not Started";
+
+      return {
+        id: String(row["No."] ?? idx + 1),
+        partNumber: String(row["Item Part Number"] ?? ""),
+        description: String(row["Item Description"] ?? ""),
+        category: inferredCategory,
+        quantity,
+        unitPrice,
+        totalPrice,
+        discountedCosts,
+        usedAmount,
+        remainingAmount,
+        status,
+      };
+    });
+  }, [parseNumericCell, selectedProjectBoqRows]);
+
+  const filteredProjectBoqRows = useMemo(() => {
+    if (boqCategoryFilter === "All") return projectBoqComputedRows;
+    return projectBoqComputedRows.filter((row) => row.category === boqCategoryFilter);
+  }, [boqCategoryFilter, projectBoqComputedRows]);
 
   const onDownloadBoqTemplate = useCallback(() => {
     const header = [
@@ -7027,15 +7214,14 @@ function ProjectModule() {
           ),
         );
       } else {
-        setProjects((prev) => [
-          {
-            ...form,
-            contractValue: String(parsedValue),
-            id: typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random()),
-            createdAt: new Date().toISOString(),
-          },
-          ...prev,
-        ]);
+        const newProject: ProjectRecord = {
+          ...form,
+          contractValue: String(parsedValue),
+          id: typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random()),
+          createdAt: new Date().toISOString(),
+        };
+        setProjects((prev) => [newProject, ...prev]);
+        setSelectedProjectId(newProject.id);
       }
       closeCreateModal();
     },
@@ -7080,7 +7266,18 @@ function ProjectModule() {
                 ) : (
                   projects.map((project) => (
                     <tr key={project.id} className="border-t">
-                      <td className="px-3 py-2">{project.projectName}</td>
+                      <td className="px-3 py-2">
+                        <button
+                          type="button"
+                          className={cn(
+                            "text-left text-xs hover:underline",
+                            selectedProjectId === project.id ? "font-semibold text-foreground" : "text-foreground/90",
+                          )}
+                          onClick={() => setSelectedProjectId(project.id)}
+                        >
+                          {project.projectName}
+                        </button>
+                      </td>
                       <td className="px-3 py-2">{project.client}</td>
                       <td className="px-3 py-2">{project.businessUnit}</td>
                       <td className="px-3 py-2">
@@ -7108,6 +7305,141 @@ function ProjectModule() {
           </div>
         </CardContent>
       </Card>
+
+      {selectedProject ? (
+        <Card className="shadow-none">
+          <CardHeader>
+            <CardTitle>{selectedProject.projectName}</CardTitle>
+            <p className="text-xs text-muted-foreground">
+              {selectedProject.client} • {selectedProject.businessUnit} • {selectedProject.sector}
+            </p>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-3 md:grid-cols-4">
+              <div className="rounded-md border p-3">
+                <p className="text-[11px] text-muted-foreground">Contract Value</p>
+                <p className="text-sm font-semibold">
+                  {new Intl.NumberFormat("en-US", {
+                    style: "currency",
+                    currency: selectedProject.currency,
+                    maximumFractionDigits: 0,
+                  }).format(Number(selectedProject.contractValue))}
+                </p>
+              </div>
+              <div className="rounded-md border p-3">
+                <p className="text-[11px] text-muted-foreground">Project Timeline</p>
+                <p className="text-sm font-semibold">
+                  {selectedProject.projectStartDate} to {selectedProject.projectEndDate}
+                </p>
+              </div>
+              <div className="rounded-md border p-3">
+                <p className="text-[11px] text-muted-foreground">Team Lead Role</p>
+                <p className="text-sm font-semibold">{selectedProject.role}</p>
+              </div>
+              <div className="rounded-md border p-3">
+                <p className="text-[11px] text-muted-foreground">Assigned Member</p>
+                <p className="text-sm font-semibold">{selectedProject.memberName}</p>
+              </div>
+            </div>
+
+            <div className="rounded-md border">
+              <div className="flex items-center justify-between border-b px-4 py-3">
+                <div>
+                  <p className="text-sm font-semibold">Cost</p>
+                  <p className="text-xs text-muted-foreground">Project cost tracking and planning.</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button type="button" size="sm" variant={costSection === "boq" ? "default" : "outline"} onClick={() => setCostSection("boq")}>
+                    Project BOQ
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={costSection === "budget" ? "default" : "outline"}
+                    onClick={() => setCostSection("budget")}
+                  >
+                    Budget Planning
+                  </Button>
+                </div>
+              </div>
+
+              {costSection === "boq" ? (
+                <div className="space-y-3 p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-xs text-muted-foreground">Imported BOQ items with live tracking fields.</p>
+                    <div className="flex items-center gap-2">
+                      <label className="text-xs text-muted-foreground">Category</label>
+                      <select
+                        className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+                        value={boqCategoryFilter}
+                        onChange={(e) => setBoqCategoryFilter(e.target.value as "All" | BoqCategory)}
+                      >
+                        <option value="All">All</option>
+                        {boqCategoryOptions.map((category) => (
+                          <option key={category} value={category}>
+                            {category}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="overflow-x-auto rounded-md border">
+                    <table className="min-w-full text-xs">
+                      <thead className="bg-muted/50 text-muted-foreground">
+                        <tr>
+                          <th className="px-2 py-2 text-left font-medium">No.</th>
+                          <th className="px-2 py-2 text-left font-medium">Item Part Number</th>
+                          <th className="px-2 py-2 text-left font-medium">Item Description</th>
+                          <th className="px-2 py-2 text-left font-medium">Category</th>
+                          <th className="px-2 py-2 text-right font-medium">Quantity</th>
+                          <th className="px-2 py-2 text-right font-medium">Unit Price</th>
+                          <th className="px-2 py-2 text-right font-medium">Total Price</th>
+                          <th className="px-2 py-2 text-right font-medium">Discounted Costs</th>
+                          <th className="px-2 py-2 text-right font-medium">Used Amount</th>
+                          <th className="px-2 py-2 text-right font-medium">Remaining Amount</th>
+                          <th className="px-2 py-2 text-left font-medium">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredProjectBoqRows.length === 0 ? (
+                          <tr>
+                            <td colSpan={11} className="px-2 py-6 text-center text-muted-foreground">
+                              No BOQ rows found for the selected category.
+                            </td>
+                          </tr>
+                        ) : (
+                          filteredProjectBoqRows.map((row) => (
+                            <tr key={`${selectedProject.id}-${row.id}-${row.partNumber}`} className="border-t">
+                              <td className="px-2 py-2">{row.id}</td>
+                              <td className="px-2 py-2">{row.partNumber || "—"}</td>
+                              <td className="px-2 py-2">{row.description || "—"}</td>
+                              <td className="px-2 py-2">{row.category}</td>
+                              <td className="px-2 py-2 text-right">{row.quantity.toLocaleString()}</td>
+                              <td className="px-2 py-2 text-right">{row.unitPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
+                              <td className="px-2 py-2 text-right">{row.totalPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
+                              <td className="px-2 py-2 text-right">{row.discountedCosts.toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
+                              <td className="px-2 py-2 text-right">{row.usedAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
+                              <td className="px-2 py-2 text-right">{row.remainingAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
+                              <td className="px-2 py-2">
+                                <StatusBadge value={row.status} />
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              ) : (
+                <div className="p-4 text-xs text-muted-foreground">
+                  Budget planning workspace is ready for next step. This section can be connected to detailed budget phases and approvals.
+                </div>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
 
       {isCreateOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
