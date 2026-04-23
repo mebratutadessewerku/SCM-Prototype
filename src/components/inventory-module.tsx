@@ -125,6 +125,18 @@ function invLocName(locations: InvLocation[], id: string | null) {
   return locations.find((l) => l.id === id)?.name ?? "—";
 }
 
+function getItemStockTotals(stockRows: InvStockRow[], itemName: string) {
+  return stockRows
+    .filter((row) => row.itemName === itemName)
+    .reduce(
+      (totals, row) => ({
+        available: totals.available + row.available,
+        reserved: totals.reserved + row.reserved,
+      }),
+      { available: 0, reserved: 0 },
+    );
+}
+
 const selectClass = "h-9 w-full rounded-md border border-input bg-background px-3 text-xs";
 const filterSelect = "h-9 shrink-0 rounded-md border border-input bg-background px-2 text-xs sm:w-40";
 
@@ -647,6 +659,32 @@ export function InventoryModule() {
       setRequestError("All quantities must be greater than 0.");
       return;
     }
+    const requestedByItem = requestRows.reduce<Record<string, { quantity: number; uom: string }>>((acc, row) => {
+      const key = row.itemName.trim();
+      if (!key) return acc;
+      const quantity = Number(row.quantity);
+      const existing = acc[key];
+      if (existing) {
+        acc[key] = { ...existing, quantity: existing.quantity + quantity };
+      } else {
+        acc[key] = { quantity, uom: row.uom };
+      }
+      return acc;
+    }, {});
+    const overAllocatedEntry = Object.entries(requestedByItem).find(([itemName, req]) => {
+      const totals = getItemStockTotals(stockRows, itemName);
+      const freeToReserve = Math.max(0, totals.available - totals.reserved);
+      return req.quantity > freeToReserve;
+    });
+    if (overAllocatedEntry) {
+      const [itemName, req] = overAllocatedEntry;
+      const totals = getItemStockTotals(stockRows, itemName);
+      const freeToReserve = Math.max(0, totals.available - totals.reserved);
+      setRequestError(
+        `${itemName}: requested ${req.quantity} ${req.uom}, but ${totals.reserved} ${req.uom} is already reserved out of ${totals.available} total. Only ${freeToReserve} ${req.uom} can be reserved now.`,
+      );
+      return;
+    }
     const projectLabel = requestProjectKey
       ? (INV_PROJECT_OPTIONS.find((p) => p.value === requestProjectKey)?.label ?? requestProjectKey)
       : "No project";
@@ -656,6 +694,21 @@ export function InventoryModule() {
     setStockNotice(
       `${requestMode === "single" ? "Single" : "Bulk"} request submitted for ${requestRows.length} item(s) under ${projectLabel} / ${departmentLabel}.`,
     );
+    setStockRows((prev) => {
+      const requestedCopy = Object.entries(requestedByItem).reduce<Record<string, number>>((acc, [itemName, req]) => {
+        acc[itemName] = req.quantity;
+        return acc;
+      }, {});
+      return prev.map((row) => {
+        const remaining = requestedCopy[row.itemName] ?? 0;
+        if (remaining <= 0) return row;
+        const reservable = Math.max(0, row.available - row.reserved);
+        const reserveNow = Math.min(reservable, remaining);
+        if (reserveNow <= 0) return row;
+        requestedCopy[row.itemName] = remaining - reserveNow;
+        return { ...row, reserved: row.reserved + reserveNow };
+      });
+    });
     setRequestRecords((prev) => [
       ...requestRows.map((row) => ({
         id: typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `req-${Date.now()}-${row.id}`,
@@ -675,22 +728,12 @@ export function InventoryModule() {
     ]);
     setRequestModalOpen(false);
     setRequestError("");
-  }, [requestDepartmentKey, requestMode, requestProjectKey, requestRows, todayStr]);
+  }, [requestDepartmentKey, requestMode, requestProjectKey, requestRows, stockRows, todayStr]);
 
   const approveRequestRecord = useCallback(
     (requestId: string) => {
       const request = requestRecords.find((r) => r.id === requestId);
       if (!request || request.status !== "Pending") return;
-
-      const totalAvailable = stockRows
-        .filter((row) => row.itemName === request.itemName)
-        .reduce((sum, row) => sum + row.available, 0);
-      if (totalAvailable < request.quantity) {
-        setStockNotice(
-          `Cannot approve ${request.itemName}. Requested ${request.quantity} ${request.uom}, but only ${totalAvailable} available in stock.`,
-        );
-        return;
-      }
 
       setRequestRecords((prev) =>
         prev.map((row) =>
@@ -699,7 +742,7 @@ export function InventoryModule() {
       );
       setStockNotice(`${request.itemName} request approved. Awaiting storekeeper delivery confirmation.`);
     },
-    [requestRecords, stockRows, todayStr],
+    [requestRecords, todayStr],
   );
 
   const confirmRequestDelivery = useCallback(
@@ -707,12 +750,10 @@ export function InventoryModule() {
       const request = requestRecords.find((r) => r.id === requestId);
       if (!request || request.status !== "Approved") return;
 
-      const totalAvailable = stockRows
-        .filter((row) => row.itemName === request.itemName)
-        .reduce((sum, row) => sum + row.available, 0);
-      if (totalAvailable < request.quantity) {
+      const totals = getItemStockTotals(stockRows, request.itemName);
+      if (totals.reserved < request.quantity) {
         setStockNotice(
-          `Cannot deliver ${request.itemName}. Requested ${request.quantity} ${request.uom}, but only ${totalAvailable} available in stock.`,
+          `Cannot deliver ${request.itemName}. Requested ${request.quantity} ${request.uom}, but only ${totals.reserved} ${request.uom} is reserved (${totals.available} total available).`,
         );
         return;
       }
@@ -721,9 +762,13 @@ export function InventoryModule() {
       setStockRows((prev) =>
         prev.map((row) => {
           if (row.itemName !== request.itemName || remaining <= 0) return row;
-          const deduct = Math.min(row.available, remaining);
-          remaining -= deduct;
-          return { ...row, available: row.available - deduct };
+          const issueNow = Math.min(row.reserved, remaining);
+          remaining -= issueNow;
+          return {
+            ...row,
+            available: row.available - issueNow,
+            reserved: row.reserved - issueNow,
+          };
         }),
       );
 
@@ -739,16 +784,28 @@ export function InventoryModule() {
 
   const rejectRequestRecord = useCallback(
     (requestId: string) => {
+      const request = requestRecords.find((r) => r.id === requestId);
+      if (!request || (request.status !== "Pending" && request.status !== "Approved")) return;
+
+      let releaseRemaining = request.quantity;
+      setStockRows((prev) =>
+        prev.map((row) => {
+          if (row.itemName !== request.itemName || releaseRemaining <= 0) return row;
+          const releaseNow = Math.min(row.reserved, releaseRemaining);
+          releaseRemaining -= releaseNow;
+          return { ...row, reserved: row.reserved - releaseNow };
+        }),
+      );
       setRequestRecords((prev) =>
         prev.map((row) =>
-          row.id === requestId && row.status === "Pending"
+          row.id === requestId && (row.status === "Pending" || row.status === "Approved")
             ? { ...row, status: "Rejected", reviewedAt: todayStr, deliveredAt: null }
             : row,
         ),
       );
       setStockNotice("Request rejected.");
     },
-    [todayStr],
+    [requestRecords, todayStr],
   );
 
   const approveReturnRecord = useCallback(

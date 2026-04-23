@@ -12,7 +12,8 @@ import {
   type SubmitApprovalDocumentInput,
   type WorkflowRule,
 } from "@/lib/approval-workflow";
-import { type Dispatch, type SetStateAction, useCallback, useEffect, useMemo, useState } from "react";
+import { type Dispatch, type SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import * as XLSX from "xlsx";
 import {
   Activity,
   Bell,
@@ -58,6 +59,7 @@ import { cn } from "@/lib/utils";
 type MainModule =
   | "Dashboard"
   | "Procurement"
+  | "Project"
   | "Sourcing"
   | "Inventory"
   | "Budget"
@@ -77,6 +79,7 @@ type ProcurementItemCategoryRow = { id: string; categoryName: string; descriptio
 
 const modules: { label: MainModule; icon: React.ElementType }[] = [
   { label: "Dashboard", icon: LayoutGrid },
+  { label: "Project", icon: Building2 },
   { label: "Sourcing", icon: Users },
   { label: "Procurement", icon: ShoppingCart },
   { label: "Inventory", icon: Boxes },
@@ -6743,6 +6746,673 @@ function SourcingModule() {
   );
 }
 
+type ProjectFormValues = {
+  projectName: string;
+  client: string;
+  businessUnit: string;
+  sector: string;
+  role: string;
+  memberName: string;
+  contractValue: string;
+  currency: string;
+  numberOfMilestones: string;
+  contractSignDate: string;
+  plannedEndDate: string;
+  projectStartDate: string;
+  projectEndDate: string;
+  lcOpeningDate: string;
+  advancePaymentDate: string;
+  officeProject: boolean;
+  newOpportunity: boolean;
+};
+
+type ProjectRecord = ProjectFormValues & {
+  id: string;
+  createdAt: string;
+};
+
+const createEmptyProjectForm = (): ProjectFormValues => ({
+  projectName: "",
+  client: "",
+  businessUnit: "",
+  sector: "",
+  role: "",
+  memberName: "",
+  contractValue: "",
+  currency: "",
+  numberOfMilestones: "",
+  contractSignDate: "",
+  plannedEndDate: "",
+  projectStartDate: "",
+  projectEndDate: "",
+  lcOpeningDate: "",
+  advancePaymentDate: "",
+  officeProject: false,
+  newOpportunity: false,
+});
+
+function ProjectModule() {
+  type ProjectModalMode = "create" | "view" | "edit";
+  const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [modalMode, setModalMode] = useState<ProjectModalMode>("create");
+  const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
+  const [form, setForm] = useState<ProjectFormValues>(createEmptyProjectForm());
+  const [formError, setFormError] = useState<string | null>(null);
+  const [projects, setProjects] = useState<ProjectRecord[]>([]);
+  const [boqNotice, setBoqNotice] = useState<string | null>(null);
+  const [boqByProject, setBoqByProject] = useState<Record<string, Array<Record<string, string | number>>>>({});
+  const boqUploadInputRef = useRef<HTMLInputElement | null>(null);
+  const readOnly = modalMode === "view";
+
+  const resetForm = useCallback(() => {
+    setForm(createEmptyProjectForm());
+    setFormError(null);
+  }, []);
+
+  const closeCreateModal = useCallback(() => {
+    setIsCreateOpen(false);
+    setModalMode("create");
+    setActiveProjectId(null);
+    resetForm();
+    setBoqNotice(null);
+  }, [resetForm]);
+
+  const openCreateModal = useCallback(() => {
+    setModalMode("create");
+    setActiveProjectId(null);
+    setForm(createEmptyProjectForm());
+    setFormError(null);
+    setIsCreateOpen(true);
+  }, []);
+
+  const openViewModal = useCallback((project: ProjectRecord) => {
+    setModalMode("view");
+    setActiveProjectId(project.id);
+    setForm({
+      projectName: project.projectName,
+      client: project.client,
+      businessUnit: project.businessUnit,
+      sector: project.sector,
+      role: project.role,
+      memberName: project.memberName,
+      contractValue: project.contractValue,
+      currency: project.currency,
+      numberOfMilestones: project.numberOfMilestones,
+      contractSignDate: project.contractSignDate,
+      plannedEndDate: project.plannedEndDate,
+      projectStartDate: project.projectStartDate,
+      projectEndDate: project.projectEndDate,
+      lcOpeningDate: project.lcOpeningDate,
+      advancePaymentDate: project.advancePaymentDate,
+      officeProject: project.officeProject,
+      newOpportunity: project.newOpportunity,
+    });
+    setFormError(null);
+    setIsCreateOpen(true);
+  }, []);
+
+  const openEditModal = useCallback((project: ProjectRecord) => {
+    setModalMode("edit");
+    setActiveProjectId(project.id);
+    setForm({
+      projectName: project.projectName,
+      client: project.client,
+      businessUnit: project.businessUnit,
+      sector: project.sector,
+      role: project.role,
+      memberName: project.memberName,
+      contractValue: project.contractValue,
+      currency: project.currency,
+      numberOfMilestones: project.numberOfMilestones,
+      contractSignDate: project.contractSignDate,
+      plannedEndDate: project.plannedEndDate,
+      projectStartDate: project.projectStartDate,
+      projectEndDate: project.projectEndDate,
+      lcOpeningDate: project.lcOpeningDate,
+      advancePaymentDate: project.advancePaymentDate,
+      officeProject: project.officeProject,
+      newOpportunity: project.newOpportunity,
+    });
+    setFormError(null);
+    setIsCreateOpen(true);
+  }, []);
+
+  const onDeleteProject = useCallback((project: ProjectRecord) => {
+    if (!window.confirm(`Delete project "${project.projectName}"?`)) return;
+    setProjects((prev) => prev.filter((row) => row.id !== project.id));
+    setBoqByProject((prev) => {
+      const next = { ...prev };
+      delete next[project.id];
+      return next;
+    });
+  }, []);
+
+  const onDownloadBoqTemplate = useCallback(() => {
+    const header = [
+      "No.",
+      "Item Part Number",
+      "Item Description",
+      "UOM",
+      "Qty",
+      "GPT. Unit Cost",
+      "GPT. Total Cost",
+      "Discount",
+      "Discounted Unit Cost",
+      "Discounted Total Cost",
+      "Freight Insurance",
+      "Bank Charges",
+      "Import Tax",
+      "Margin",
+      "Unit Price",
+      "Total Price",
+    ];
+    const rows = [
+      [
+        1,
+        "J9254B#2A",
+        "HPE ProLiant DL380 Gen11 8SFF CTO Configure-to-order Server",
+        "set",
+        1,
+        11434.3,
+        11434.3,
+        "0%",
+        11434.3,
+        11434.3,
+        "10%",
+        "0%",
+        "0%",
+        "55%",
+        17738.742,
+        17738.742,
+      ],
+      [
+        2,
+        "R0R42A",
+        "HPE 25Gb SFP28 SR 100m Transceiver",
+        "set",
+        24,
+        260.9,
+        6261.6,
+        "0%",
+        260.9,
+        6261.6,
+        "10%",
+        "0%",
+        "0%",
+        "55%",
+        398.7625,
+        9570.3,
+      ],
+    ];
+
+    const ws = XLSX.utils.aoa_to_sheet([header, ...rows]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "BOQ");
+    const safeProjectName = (form.projectName || "project").replace(/[^\w-]+/g, "_");
+    XLSX.writeFile(wb, `${safeProjectName}_boq_template.xlsx`);
+  }, [form.projectName]);
+
+  const onAddBoq = useCallback(() => {
+    boqUploadInputRef.current?.click();
+  }, []);
+
+  const onBoqUploadFile = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file || !activeProjectId) return;
+      try {
+        const data = await file.arrayBuffer();
+        const workbook = XLSX.read(data, { type: "array" });
+        const firstSheetName = workbook.SheetNames[0];
+        if (!firstSheetName) {
+          setBoqNotice("The selected Excel file has no sheets.");
+          return;
+        }
+        const sheet = workbook.Sheets[firstSheetName];
+        const rows = XLSX.utils.sheet_to_json<Record<string, string | number>>(sheet, { defval: "" });
+        setBoqByProject((prev) => ({ ...prev, [activeProjectId]: rows }));
+        setBoqNotice(`BoQ uploaded successfully (${rows.length} row${rows.length === 1 ? "" : "s"}).`);
+      } catch {
+        setBoqNotice("Could not read the selected Excel file. Please use a valid .xlsx/.xls file.");
+      } finally {
+        e.target.value = "";
+      }
+    },
+    [activeProjectId],
+  );
+
+  const onSubmit = useCallback(
+    (e: React.FormEvent<HTMLFormElement>) => {
+      e.preventDefault();
+      if (readOnly) {
+        closeCreateModal();
+        return;
+      }
+      if (!form.projectName.trim()) return setFormError("Project Name is required.");
+      if (!form.client) return setFormError("Client is required.");
+      if (!form.businessUnit) return setFormError("Business Unit is required.");
+      if (!form.sector) return setFormError("Sector is required.");
+      if (!form.role) return setFormError("Team role is required.");
+      if (!form.memberName) return setFormError("Member Name is required.");
+      if (!form.currency) return setFormError("Currency is required.");
+      if (!form.numberOfMilestones) return setFormError("Number of Milestones is required.");
+      if (!form.contractSignDate) return setFormError("Contract Sign Date is required.");
+      if (!form.plannedEndDate) return setFormError("Planned End Date is required.");
+      if (!form.projectStartDate) return setFormError("Project Start Date is required.");
+      if (!form.projectEndDate) return setFormError("Project End Date is required.");
+      if (!form.lcOpeningDate) return setFormError("LC Opening Date is required.");
+      if (!form.advancePaymentDate) return setFormError("Advance Payment Date is required.");
+
+      const parsedValue = Number(form.contractValue);
+      if (!Number.isFinite(parsedValue) || parsedValue <= 0) {
+        return setFormError("Contract Value must be a number greater than 0.");
+      }
+      if (new Date(form.projectEndDate) < new Date(form.projectStartDate)) {
+        return setFormError("Project End Date cannot be earlier than Project Start Date.");
+      }
+      if (new Date(form.plannedEndDate) < new Date(form.contractSignDate)) {
+        return setFormError("Planned End Date cannot be earlier than Contract Sign Date.");
+      }
+
+      if (modalMode === "edit" && activeProjectId) {
+        setProjects((prev) =>
+          prev.map((row) =>
+            row.id === activeProjectId
+              ? {
+                  ...row,
+                  ...form,
+                  contractValue: String(parsedValue),
+                }
+              : row,
+          ),
+        );
+      } else {
+        setProjects((prev) => [
+          {
+            ...form,
+            contractValue: String(parsedValue),
+            id: typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random()),
+            createdAt: new Date().toISOString(),
+          },
+          ...prev,
+        ]);
+      }
+      closeCreateModal();
+    },
+    [activeProjectId, closeCreateModal, form, modalMode, readOnly],
+  );
+
+  return (
+    <div className="space-y-4">
+      <Card className="shadow-none">
+        <CardHeader className="flex flex-row items-center justify-between">
+          <div>
+            <CardTitle>Project Management</CardTitle>
+            <p className="text-xs text-muted-foreground">Track project setup, team assignment, and milestone readiness.</p>
+          </div>
+          <CardAction>
+            <Button size="sm" onClick={openCreateModal}>
+              <Plus className="mr-1 h-4 w-4" />
+              Add Project
+            </Button>
+          </CardAction>
+        </CardHeader>
+        <CardContent>
+          <div className="rounded-md border">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/50 text-xs text-muted-foreground">
+                <tr>
+                  <th className="px-3 py-2 text-left font-medium">Project Name</th>
+                  <th className="px-3 py-2 text-left font-medium">Client</th>
+                  <th className="px-3 py-2 text-left font-medium">Business Unit</th>
+                  <th className="px-3 py-2 text-left font-medium">Contract Value</th>
+                  <th className="px-3 py-2 text-left font-medium">Start - End</th>
+                  <th className="px-3 py-2 text-right font-medium">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {projects.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="px-3 py-8 text-center text-xs text-muted-foreground">
+                      No projects added yet. Use Add Project to create the first entry.
+                    </td>
+                  </tr>
+                ) : (
+                  projects.map((project) => (
+                    <tr key={project.id} className="border-t">
+                      <td className="px-3 py-2">{project.projectName}</td>
+                      <td className="px-3 py-2">{project.client}</td>
+                      <td className="px-3 py-2">{project.businessUnit}</td>
+                      <td className="px-3 py-2">
+                        {new Intl.NumberFormat("en-US", { style: "currency", currency: project.currency, maximumFractionDigits: 0 }).format(
+                          Number(project.contractValue),
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-xs text-muted-foreground">
+                        {project.projectStartDate} to {project.projectEndDate}
+                      </td>
+                      <td className="px-3 py-2">
+                        <div className="flex justify-end gap-1">
+                          <Button type="button" variant="ghost" size="icon" className="h-8 w-8" onClick={() => openViewModal(project)}>
+                            <Eye className="h-4 w-4" />
+                          </Button>
+                          <TableEditIconButton onClick={() => openEditModal(project)} />
+                          <TableDeleteIconButton onClick={() => onDeleteProject(project)} />
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </CardContent>
+      </Card>
+
+      {isCreateOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-4xl rounded-lg border bg-background shadow-lg">
+            <div className="flex items-center justify-between border-b px-5 py-3">
+              <div>
+                <h2 className="text-sm font-semibold">
+                  {modalMode === "view" ? "View Project" : modalMode === "edit" ? "Edit Project" : "Add Project"}
+                </h2>
+                <p className="text-xs text-muted-foreground">
+                  {modalMode === "view"
+                    ? "Review project details."
+                    : modalMode === "edit"
+                      ? "Update project details and save changes."
+                      : "Fill in the fields below to create a project profile."}
+                </p>
+              </div>
+              <Button type="button" variant="ghost" size="icon" onClick={closeCreateModal}>
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+            {readOnly ? (
+              <div className="flex items-center justify-between gap-2 border-b bg-muted/20 px-5 py-3">
+                <div className="text-xs text-muted-foreground">
+                  Quick Actions
+                  {activeProjectId && boqByProject[activeProjectId]
+                    ? ` • ${boqByProject[activeProjectId].length} BoQ row(s) linked`
+                    : " • no BoQ uploaded yet"}
+                </div>
+                <div className="flex items-center gap-2">
+                  <input
+                    ref={boqUploadInputRef}
+                    type="file"
+                    accept=".xlsx,.xls"
+                    className="hidden"
+                    onChange={onBoqUploadFile}
+                  />
+                  <Button type="button" size="sm" variant="outline" onClick={onAddBoq}>
+                    Add BoQ
+                  </Button>
+                  <Button type="button" size="sm" onClick={onDownloadBoqTemplate}>
+                    BOQ Template
+                  </Button>
+                </div>
+              </div>
+            ) : null}
+            <form className="space-y-4 p-5" onSubmit={onSubmit}>
+              <section className="space-y-2">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">General Information</p>
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium">Project Name</label>
+                    <Input
+                      value={form.projectName}
+                      onChange={(e) => setForm((prev) => ({ ...prev, projectName: e.target.value }))}
+                      className="h-9 text-xs"
+                      placeholder="Enter project name"
+                      disabled={readOnly}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium">Client</label>
+                    <select
+                      value={form.client}
+                      onChange={(e) => setForm((prev) => ({ ...prev, client: e.target.value }))}
+                      className="h-9 w-full rounded-md border border-input bg-background px-3 text-xs"
+                      disabled={readOnly}
+                    >
+                      <option value="">Select client</option>
+                      <option>EthioTel Infrastructure</option>
+                      <option>Sunrise Trading PLC</option>
+                      <option>Atlas Development Group</option>
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium">Business Unit</label>
+                    <select
+                      value={form.businessUnit}
+                      onChange={(e) => setForm((prev) => ({ ...prev, businessUnit: e.target.value }))}
+                      className="h-9 w-full rounded-md border border-input bg-background px-3 text-xs"
+                      disabled={readOnly}
+                    >
+                      <option value="">Select business unit</option>
+                      <option>Construction</option>
+                      <option>Logistics</option>
+                      <option>Operations</option>
+                      <option>Technology</option>
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium">Sector</label>
+                    <select
+                      value={form.sector}
+                      onChange={(e) => setForm((prev) => ({ ...prev, sector: e.target.value }))}
+                      className="h-9 w-full rounded-md border border-input bg-background px-3 text-xs"
+                      disabled={readOnly}
+                    >
+                      <option value="">Select sector</option>
+                      <option>Infrastructure</option>
+                      <option>Industrial</option>
+                      <option>Commercial</option>
+                      <option>Public Services</option>
+                    </select>
+                  </div>
+                </div>
+              </section>
+
+              <section className="space-y-2">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Team Assignment</p>
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium">Role</label>
+                    <select
+                      value={form.role}
+                      onChange={(e) => setForm((prev) => ({ ...prev, role: e.target.value }))}
+                      className="h-9 w-full rounded-md border border-input bg-background px-3 text-xs"
+                      disabled={readOnly}
+                    >
+                      <option value="">Select role</option>
+                      <option>Project Manager</option>
+                      <option>Site Engineer</option>
+                      <option>Quantity Surveyor</option>
+                      <option>Finance Officer</option>
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium">Member Name</label>
+                    <select
+                      value={form.memberName}
+                      onChange={(e) => setForm((prev) => ({ ...prev, memberName: e.target.value }))}
+                      className="h-9 w-full rounded-md border border-input bg-background px-3 text-xs"
+                      disabled={readOnly}
+                    >
+                      <option value="">Select team member</option>
+                      <option>Alex Johnson</option>
+                      <option>Daniel Garcia</option>
+                      <option>Michael Lee</option>
+                      <option>Anna Brown</option>
+                    </select>
+                  </div>
+                </div>
+              </section>
+
+              <section className="space-y-2">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Financial Details</p>
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium">Contract Value</label>
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={form.contractValue}
+                      onChange={(e) => setForm((prev) => ({ ...prev, contractValue: e.target.value }))}
+                      className="h-9 text-xs"
+                      placeholder="0.00"
+                      disabled={readOnly}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium">Currency</label>
+                    <select
+                      value={form.currency}
+                      onChange={(e) => setForm((prev) => ({ ...prev, currency: e.target.value }))}
+                      className="h-9 w-full rounded-md border border-input bg-background px-3 text-xs"
+                      disabled={readOnly}
+                    >
+                      <option value="">Select currency</option>
+                      <option value="USD">USD</option>
+                      <option value="ETB">ETB</option>
+                      <option value="EUR">EUR</option>
+                    </select>
+                  </div>
+                </div>
+              </section>
+
+              <section className="space-y-2">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Timeline & Milestones</p>
+                <div className="grid gap-3 md:grid-cols-3">
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium">Number of Milestones</label>
+                    <select
+                      value={form.numberOfMilestones}
+                      onChange={(e) => setForm((prev) => ({ ...prev, numberOfMilestones: e.target.value }))}
+                      className="h-9 w-full rounded-md border border-input bg-background px-3 text-xs"
+                      disabled={readOnly}
+                    >
+                      <option value="">Select count</option>
+                      <option value="1">1</option>
+                      <option value="2">2</option>
+                      <option value="3">3</option>
+                      <option value="4">4</option>
+                      <option value="5">5</option>
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium">Contract Sign Date</label>
+                    <Input
+                      type="date"
+                      value={form.contractSignDate}
+                      onChange={(e) => setForm((prev) => ({ ...prev, contractSignDate: e.target.value }))}
+                      className="h-9 text-xs"
+                      disabled={readOnly}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium">Planned End Date</label>
+                    <Input
+                      type="date"
+                      value={form.plannedEndDate}
+                      onChange={(e) => setForm((prev) => ({ ...prev, plannedEndDate: e.target.value }))}
+                      className="h-9 text-xs"
+                      disabled={readOnly}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium">Project Start Date</label>
+                    <Input
+                      type="date"
+                      value={form.projectStartDate}
+                      onChange={(e) => setForm((prev) => ({ ...prev, projectStartDate: e.target.value }))}
+                      className="h-9 text-xs"
+                      disabled={readOnly}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium">Project End Date</label>
+                    <Input
+                      type="date"
+                      value={form.projectEndDate}
+                      onChange={(e) => setForm((prev) => ({ ...prev, projectEndDate: e.target.value }))}
+                      className="h-9 text-xs"
+                      disabled={readOnly}
+                    />
+                  </div>
+                </div>
+              </section>
+
+              <section className="space-y-2">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Financial Milestones</p>
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium">LC Opening Date</label>
+                    <Input
+                      type="date"
+                      value={form.lcOpeningDate}
+                      onChange={(e) => setForm((prev) => ({ ...prev, lcOpeningDate: e.target.value }))}
+                      className="h-9 text-xs"
+                      disabled={readOnly}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium">Advance Payment Date</label>
+                    <Input
+                      type="date"
+                      value={form.advancePaymentDate}
+                      onChange={(e) => setForm((prev) => ({ ...prev, advancePaymentDate: e.target.value }))}
+                      className="h-9 text-xs"
+                      disabled={readOnly}
+                    />
+                  </div>
+                </div>
+              </section>
+
+              <section className="space-y-2">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Flags / Options</p>
+                <div className="flex flex-wrap items-center gap-6 rounded-md border bg-muted/20 px-3 py-3">
+                  <label className="flex items-center gap-2 text-xs">
+                    <input
+                      type="checkbox"
+                      checked={form.officeProject}
+                      onChange={(e) => setForm((prev) => ({ ...prev, officeProject: e.target.checked }))}
+                      disabled={readOnly}
+                    />
+                    Office Project
+                  </label>
+                  <label className="flex items-center gap-2 text-xs">
+                    <input
+                      type="checkbox"
+                      checked={form.newOpportunity}
+                      onChange={(e) => setForm((prev) => ({ ...prev, newOpportunity: e.target.checked }))}
+                      disabled={readOnly}
+                    />
+                    New Opportunity
+                  </label>
+                </div>
+              </section>
+
+              {formError ? <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{formError}</p> : null}
+              {boqNotice ? <p className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700">{boqNotice}</p> : null}
+
+              <div className="flex justify-end gap-2 border-t pt-3">
+                <Button type="button" variant="outline" size="sm" onClick={closeCreateModal}>
+                  {readOnly ? "Close" : "Cancel"}
+                </Button>
+                {!readOnly ? <Button type="submit" size="sm">{modalMode === "edit" ? "Update Project" : "Save Project"}</Button> : null}
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 type BudgetEntityType = "Project" | "Department";
 
 type BudgetEntity = {
@@ -7369,6 +8039,7 @@ export default function Home() {
               createdMasterDataRows={createdMasterDataRows}
             />
           )}
+          {activeModule === "Project" && <ProjectModule />}
           {activeModule === "Sourcing" && <SourcingModule />}
           {activeModule === "Inventory" && <InventoryModule />}
           {activeModule === "Budget" && <BudgetModule />}
