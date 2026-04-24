@@ -7391,6 +7391,24 @@ type ProjectBoqItem = {
   category: "Local Material" | "Product" | "Service" | "Training";
 };
 
+type ProjectPiLine = {
+  partNumber: string;
+  itemDescription: string;
+  quantity: number;
+  unitPrice: number;
+  totalPrice: number;
+};
+
+type ProjectPiRecord = {
+  id: string;
+  projectId: string;
+  projectName: string;
+  createdAt: string;
+  createdBy: string;
+  authorizedRoles: string[];
+  lines: ProjectPiLine[];
+};
+
 type ProjectBudgetLine = {
   id: string;
   scopeType: "Project" | "Department";
@@ -7450,6 +7468,8 @@ function ProjectModule() {
   const [boqCategoryFilter, setBoqCategoryFilter] = useState<"All" | BoqCategory>("All");
   const [boqNotice, setBoqNotice] = useState<string | null>(null);
   const [boqByProject, setBoqByProject] = useState<Record<string, ProjectBoqItem[]>>({});
+  const [piByProject, setPiByProject] = useState<Record<string, ProjectPiRecord[]>>({});
+  const [piNotice, setPiNotice] = useState<string | null>(null);
   const [budgetLines, setBudgetLines] = useState<ProjectBudgetLine[]>([]);
   const [budgetDraft, setBudgetDraft] = useState({
     level: "Project" as "Project" | "Department",
@@ -7459,6 +7479,8 @@ function ProjectModule() {
     allocated: "",
   });
   const boqUploadInputRef = useRef<HTMLInputElement | null>(null);
+  const currentUserName = "Alex Johnson";
+  const currentUserRole = "Sourcing Officer";
   const readOnly = modalMode === "view";
   const boqCategoryOptions: BoqCategory[] = ["Local Material", "Product", "Service", "Training"];
   const activeCostSection: ProjectCostSection = projectSubModule === "boq" ? "boq" : "budget";
@@ -7570,6 +7592,11 @@ function ProjectModule() {
       delete next[project.id];
       return next;
     });
+    setPiByProject((prev) => {
+      const next = { ...prev };
+      delete next[project.id];
+      return next;
+    });
   }, []);
 
   const toNumber = useCallback((value: string | number | undefined) => {
@@ -7610,6 +7637,18 @@ function ProjectModule() {
     if (boqCategoryFilter === "All") return projectBoqComputedRows;
     return projectBoqComputedRows.filter((row) => row.category === boqCategoryFilter);
   }, [boqCategoryFilter, projectBoqComputedRows]);
+  const selectedProjectPiRows = useMemo(() => (costProjectId ? piByProject[costProjectId] ?? [] : []), [costProjectId, piByProject]);
+  const visibleProjectPiRows = useMemo(
+    () =>
+      selectedProjectPiRows.filter(
+        (row) => row.createdBy === currentUserName || row.authorizedRoles.some((role) => role === currentUserRole),
+      ),
+    [selectedProjectPiRows, currentUserName, currentUserRole],
+  );
+  const canGenerateProjectPi = useMemo(() => {
+    if (!costSelectedProject) return false;
+    return currentUserRole === "Sourcing Officer" || currentUserRole === costSelectedProject.role;
+  }, [costSelectedProject, currentUserRole]);
   const projectBudgetLines = useMemo(
     () => budgetLines.filter((line) => line.scopeType === "Project"),
     [budgetLines],
@@ -7757,6 +7796,48 @@ function ProjectModule() {
     },
     [activeProjectId, toNumber],
   );
+
+  const onGenerateProjectPi = useCallback(() => {
+    if (!costSelectedProject) {
+      setPiNotice("Select a project first to generate PI from BOQ.");
+      return;
+    }
+    if (selectedProjectBoqRows.length === 0) {
+      setPiNotice("No BOQ rows found for the selected project.");
+      return;
+    }
+    if (!canGenerateProjectPi) {
+      setPiNotice("You are not authorized to generate PI for this project.");
+      return;
+    }
+    const lines = selectedProjectBoqRows.map((row) => {
+      const unitPrice = row.unitPrice || row.gptUnitCost || row.discountedUnitCost;
+      const totalPrice = row.totalPrice || row.gptTotalCost || row.discountedTotalCost || row.quantity * unitPrice;
+      return {
+        partNumber: row.itemCode,
+        itemDescription: row.itemDescription,
+        quantity: row.quantity,
+        unitPrice,
+        totalPrice,
+      };
+    });
+    const piRecord: ProjectPiRecord = {
+      id: typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `pi-${Date.now()}`,
+      projectId: costSelectedProject.id,
+      projectName: `${costSelectedProject.projectId} - ${costSelectedProject.projectName}`,
+      createdAt: new Date().toISOString(),
+      createdBy: currentUserName,
+      authorizedRoles: Array.from(new Set(["Sourcing Officer", costSelectedProject.role].filter(Boolean))),
+      lines,
+    };
+    setPiByProject((prev) => ({
+      ...prev,
+      [costSelectedProject.id]: [piRecord, ...(prev[costSelectedProject.id] ?? [])],
+    }));
+    setPiNotice(
+      `PI generated for ${costSelectedProject.projectId} with ${lines.length} item${lines.length === 1 ? "" : "s"}.`,
+    );
+  }, [canGenerateProjectPi, costSelectedProject, currentUserName, selectedProjectBoqRows]);
 
   const onSubmit = useCallback(
     (e: React.FormEvent<HTMLFormElement>) => {
@@ -8039,8 +8120,13 @@ function ProjectModule() {
                           </option>
                         ))}
                       </select>
+                      <Button type="button" size="sm" className="h-8" onClick={onGenerateProjectPi} disabled={!canGenerateProjectPi}>
+                        <ClipboardList className="mr-1 h-4 w-4" />
+                        Generate PI
+                      </Button>
                     </div>
                   </div>
+                  {piNotice ? <p className="text-xs text-muted-foreground">{piNotice}</p> : null}
 
                   <div className="overflow-x-auto rounded-md border">
                     <table className="min-w-full text-xs">
@@ -8093,6 +8179,57 @@ function ProjectModule() {
                         )}
                       </tbody>
                     </table>
+                  </div>
+
+                  <div className="space-y-2 rounded-md border p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-xs font-semibold">PI List</p>
+                      <p className="text-[11px] text-muted-foreground">Visible to creator and assigned roles only</p>
+                    </div>
+                    {visibleProjectPiRows.length === 0 ? (
+                      <p className="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">
+                        No PI generated yet for this project or not authorized to view.
+                      </p>
+                    ) : (
+                      visibleProjectPiRows.map((pi) => (
+                        <div key={pi.id} className="space-y-2 rounded-md border p-2">
+                          <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-muted-foreground">
+                            <span>{pi.projectName}</span>
+                            <span>
+                              Created by {pi.createdBy} on {new Date(pi.createdAt).toLocaleString()}
+                            </span>
+                          </div>
+                          <div className="overflow-x-auto rounded-md border">
+                            <table className="min-w-full text-xs">
+                              <thead className="bg-muted/50 text-muted-foreground">
+                                <tr>
+                                  <th className="px-2 py-2 text-left font-medium">Part Number</th>
+                                  <th className="px-2 py-2 text-left font-medium">Item Description</th>
+                                  <th className="px-2 py-2 text-right font-medium">Quantity</th>
+                                  <th className="px-2 py-2 text-right font-medium">Unit Price</th>
+                                  <th className="px-2 py-2 text-right font-medium">Total Price</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {pi.lines.map((line, idx) => (
+                                  <tr key={`${pi.id}-${line.partNumber}-${idx}`} className="border-t">
+                                    <td className="px-2 py-2">{line.partNumber || "—"}</td>
+                                    <td className="px-2 py-2">{line.itemDescription || "—"}</td>
+                                    <td className="px-2 py-2 text-right">{line.quantity.toLocaleString()}</td>
+                                    <td className="px-2 py-2 text-right">
+                                      {line.unitPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                                    </td>
+                                    <td className="px-2 py-2 text-right">
+                                      {line.totalPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      ))
+                    )}
                   </div>
                 </div>
               ) : (
