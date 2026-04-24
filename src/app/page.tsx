@@ -59,6 +59,7 @@ import { cn } from "@/lib/utils";
 type MainModule =
   | "Dashboard"
   | "Procurement"
+  | "Procur"
   | "Project"
   | "Sourcing"
   | "Inventory"
@@ -82,6 +83,7 @@ const modules: { label: MainModule; icon: React.ElementType }[] = [
   { label: "Project", icon: Building2 },
   { label: "Sourcing", icon: Users },
   { label: "Procurement", icon: ShoppingCart },
+  { label: "Procur", icon: ShoppingCart },
   { label: "Inventory", icon: Boxes },
   { label: "Budget", icon: HandCoins },
   { label: "Reporting", icon: FileBarChart2 },
@@ -5973,6 +5975,812 @@ function ProcurementModule({
   );
 }
 
+function ProcurModule() {
+  type ProcurSource = "Office" | "Project" | "Department";
+  type ProcurStatus = "Pending Approval" | "Under Review" | "Approved";
+  type ProcurSubModule = "PR" | "RFQ" | "PO";
+  type TeamMember = { id: string; name: string; role: string };
+  type PiLine = {
+    partNumber: string;
+    itemDescription: string;
+    quantity: number;
+    unitPrice: number;
+    totalPrice: number;
+    currency: string;
+  };
+  type ProcurPrOrder = {
+    id: string;
+    prNumber: string;
+    projectId: string;
+    projectName: string;
+    source: ProcurSource;
+    piNumber: string;
+    piAttachment: string;
+    supplier: string;
+    billTo: string;
+    currency: string;
+    businessUnit: string;
+    department: string;
+    milestone: string;
+    manufacturer: string;
+    description: string;
+    status: ProcurStatus;
+    createdAt: string;
+    piLines: PiLine[];
+    subtotal: number;
+  };
+  type ProcurRfqRecord = {
+    id: string;
+    rfqNumber: string;
+    projectId: string;
+    supplier: string;
+    dueDate: string;
+    status: "Draft" | "Sent";
+  };
+  type ProcurPoRecord = {
+    id: string;
+    poNumber: string;
+    projectId: string;
+    supplier: string;
+    totalAmount: number;
+    status: "Pending Approval" | "Approved";
+  };
+  type ProcurPersistedState = {
+    prOrders: ProcurPrOrder[];
+    rfqRows: ProcurRfqRecord[];
+    poRows: ProcurPoRecord[];
+  };
+
+  const projectOptions = [
+    { id: "proj-a", name: "Construction Project A" },
+    { id: "proj-b", name: "Road Expansion Project" },
+    { id: "proj-c", name: "Warehouse Setup" },
+  ];
+  const supplierOptions = ["Swift Supplies", "Hansei Global", "Atlas Procurement", "Zenith Industrial"];
+  const billToOptions = ["Head Office", "Project Finance Team", "Operations Department", "Client Account"];
+  const currencyOptions = ["USD", "ETB", "EUR"];
+  const businessUnitOptions = ["Infrastructure", "Operations", "Technology", "Commercial"];
+  const departmentOptions = ["Procurement", "Operations", "Finance", "Logistics", "Project Office"];
+  const manufacturerOptions = ["HPE", "Caterpillar", "Siemens", "Bosch"];
+  const projectPiStorageKey = "scm.project.piByProject.v1";
+  const projectRecordsStorageKey = "scm.project.records.v1";
+
+  const [createOpen, setCreateOpen] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [activeSubModule, setActiveSubModule] = useState<ProcurSubModule>("PR");
+  const [selectedProjectId, setSelectedProjectId] = useState("");
+  const [selectedPrId, setSelectedPrId] = useState<string | null>(null);
+  const [form, setForm] = useState({
+    source: "Project" as ProcurSource,
+    projectId: "",
+    piNumber: "",
+    piAttachment: "",
+    supplier: "Swift Supplies",
+    billTo: "Project Finance Team",
+    currency: "USD",
+    businessUnit: "Infrastructure",
+    department: "Procurement",
+    milestone: "M1 - Mobilization",
+    manufacturer: "HPE",
+    description: "",
+  });
+  const [projectRecords, setProjectRecords] = useState<
+    { id: string; projectId: string; projectName: string; projectManager: string; memberName: string; role: string }[]
+  >([]);
+  const [prOrders, setPrOrders] = useState<ProcurPrOrder[]>([]);
+  const [rfqCreateOpen, setRfqCreateOpen] = useState(false);
+  const [poCreateOpen, setPoCreateOpen] = useState(false);
+  const [rfqForm, setRfqForm] = useState({
+    projectId: "proj-a",
+    supplier: "Swift Supplies",
+    dueDate: "",
+  });
+  const [poForm, setPoForm] = useState({
+    projectId: "proj-a",
+    supplier: "Swift Supplies",
+    totalAmount: "",
+  });
+  const [rfqRows, setRfqRows] = useState<ProcurRfqRecord[]>([]);
+  const [poRows, setPoRows] = useState<ProcurPoRecord[]>([]);
+  const [projectPiByProject, setProjectPiByProject] = useState<Record<string, ProjectPiRecord[]>>({});
+  const procurStorageKey = "scm.procur.persist.v1";
+  const procurPrStorageKey = "scm.procur.prOrders.v1";
+
+  const projectOptionsWithPi = useMemo(
+    () =>
+      projectRecords.map((project) => ({
+        id: project.id,
+        name: `${project.projectId} - ${project.projectName}`,
+      })),
+    [projectRecords],
+  );
+
+  const projectPrOrders = useMemo(
+    () => prOrders.filter((pr) => pr.projectId === selectedProjectId),
+    [prOrders, selectedProjectId],
+  );
+  const selectedPr = useMemo(
+    () => prOrders.find((pr) => pr.id === selectedPrId) ?? null,
+    [prOrders, selectedPrId],
+  );
+  const selectedProjectTeam = useMemo(() => {
+    if (!selectedPr) return [];
+    const project = projectRecords.find((row) => row.id === selectedPr.projectId);
+    if (!project) return [];
+
+    const team: TeamMember[] = [];
+    if (project.projectManager?.trim()) {
+      team.push({
+        id: `${project.id}-pm`,
+        name: project.projectManager,
+        role: "Project Manager",
+      });
+    }
+    if (project.memberName?.trim()) {
+      const managerName = project.projectManager?.trim().toLowerCase();
+      if (project.memberName.trim().toLowerCase() !== managerName) {
+        team.push({
+          id: `${project.id}-member`,
+          name: project.memberName,
+          role: project.role || "Team Member",
+        });
+      }
+    }
+    return team;
+  }, [projectRecords, selectedPr]);
+  const selectedPrPiLines = useMemo(() => {
+    if (!selectedPr) return [];
+    const projectPiList = projectPiByProject[selectedPr.projectId] ?? [];
+    const linkedProjectPi = projectPiList.find((pi) => pi.piNumber === selectedPr.piNumber || pi.id === selectedPr.piNumber);
+    if (!linkedProjectPi) return selectedPr.piLines;
+    return linkedProjectPi.lines.map((line) => ({
+      partNumber: line.partNumber,
+      itemDescription: line.itemDescription,
+      quantity: line.quantity,
+      unitPrice: line.unitPrice,
+      totalPrice: line.totalPrice,
+      currency: selectedPr.currency,
+    }));
+  }, [projectPiByProject, selectedPr]);
+  const selectedPrSubtotal = useMemo(
+    () => selectedPrPiLines.reduce((sum, line) => sum + line.totalPrice, 0),
+    [selectedPrPiLines],
+  );
+  const selectedProjectPiRows = useMemo(
+    () => (form.projectId ? projectPiByProject[form.projectId] ?? [] : []),
+    [form.projectId, projectPiByProject],
+  );
+  const projectRfqRows = useMemo(() => rfqRows.filter((row) => row.projectId === selectedProjectId), [rfqRows, selectedProjectId]);
+  const projectPoRows = useMemo(() => poRows.filter((row) => row.projectId === selectedProjectId), [poRows, selectedProjectId]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const rawProjects = window.localStorage.getItem(projectRecordsStorageKey);
+      if (rawProjects) {
+        const parsedProjects = JSON.parse(rawProjects) as unknown;
+        if (Array.isArray(parsedProjects)) {
+          const normalized = parsedProjects
+            .filter((row): row is { id: string; projectId: string; projectName: string; projectManager?: string; memberName?: string; role?: string } => {
+              return (
+                !!row &&
+                typeof row === "object" &&
+                typeof (row as { id?: unknown }).id === "string" &&
+                typeof (row as { projectId?: unknown }).projectId === "string" &&
+                typeof (row as { projectName?: unknown }).projectName === "string"
+              );
+            })
+            .map((row) => ({
+              id: row.id,
+              projectId: row.projectId,
+              projectName: row.projectName,
+              projectManager: row.projectManager ?? "",
+              memberName: row.memberName ?? "",
+              role: row.role ?? "",
+            }));
+          setProjectRecords(normalized);
+        }
+      }
+      const rawProjectPi = window.localStorage.getItem(projectPiStorageKey);
+      if (!rawProjectPi) return;
+      const parsedProjectPi = JSON.parse(rawProjectPi) as unknown;
+      if (parsedProjectPi && typeof parsedProjectPi === "object") {
+        setProjectPiByProject(parsedProjectPi as Record<string, ProjectPiRecord[]>);
+      }
+    } catch {
+      // Ignore invalid persisted PI payload and continue.
+    }
+  }, [projectPiStorageKey, projectRecordsStorageKey]);
+
+  useEffect(() => {
+    if (!form.projectId && projectOptionsWithPi.length > 0) {
+      setForm((prev) => ({ ...prev, projectId: projectOptionsWithPi[0].id }));
+    }
+    if (!selectedProjectId && projectOptionsWithPi.length > 0) {
+      setSelectedProjectId(projectOptionsWithPi[0].id);
+    }
+  }, [form.projectId, projectOptionsWithPi, selectedProjectId]);
+
+  useEffect(() => {
+    const piRows = form.projectId ? projectPiByProject[form.projectId] ?? [] : [];
+    const currentPiStillValid = piRows.some((pi) => (pi.piNumber || pi.id) === form.piNumber);
+    if (currentPiStillValid) return;
+    const nextPiNumber = piRows[0]?.piNumber || piRows[0]?.id || "";
+    setForm((prev) => {
+      if (prev.piNumber === nextPiNumber) return prev;
+      return { ...prev, piNumber: nextPiNumber };
+    });
+  }, [form.piNumber, form.projectId, projectPiByProject]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const rawPrOrders = window.localStorage.getItem(procurPrStorageKey);
+      let loadedFromDedicatedPrKey = false;
+      if (rawPrOrders) {
+        const parsedPrOrders = JSON.parse(rawPrOrders) as unknown;
+        if (Array.isArray(parsedPrOrders)) {
+          setPrOrders(parsedPrOrders as ProcurPrOrder[]);
+          loadedFromDedicatedPrKey = true;
+        }
+      }
+      const raw = window.localStorage.getItem(procurStorageKey);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as Partial<ProcurPersistedState>;
+      if (!loadedFromDedicatedPrKey && Array.isArray(parsed.prOrders)) setPrOrders(parsed.prOrders);
+      if (Array.isArray(parsed.rfqRows)) setRfqRows(parsed.rfqRows);
+      if (Array.isArray(parsed.poRows)) setPoRows(parsed.poRows);
+    } catch {
+      // Ignore invalid persisted payload and continue with defaults.
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const snapshot: ProcurPersistedState = { prOrders, rfqRows, poRows };
+    window.localStorage.setItem(procurStorageKey, JSON.stringify(snapshot));
+    window.localStorage.setItem(procurPrStorageKey, JSON.stringify(prOrders));
+  }, [poRows, prOrders, rfqRows]);
+
+  const handleCreatePr = useCallback(() => {
+    const project = projectOptionsWithPi.find((row) => row.id === form.projectId);
+    if (!project) {
+      setNotice("Project selection is required.");
+      return;
+    }
+    const projectPiList = projectPiByProject[form.projectId] ?? [];
+    if (projectPiList.length === 0) {
+      setNotice("No PI found for this project. Generate PI in Project module from BOQ first.");
+      return;
+    }
+    const selectedPi =
+      projectPiList.find((pi) => pi.piNumber === form.piNumber || pi.id === form.piNumber) ?? projectPiList[0];
+    if (!selectedPi) {
+      setNotice("Select a valid PI from the project PI list.");
+      return;
+    }
+    if (!form.supplier.trim()) {
+      setNotice("Supplier is required.");
+      return;
+    }
+    const piLines: PiLine[] = selectedPi.lines.map((line) => ({
+      partNumber: line.partNumber,
+      itemDescription: line.itemDescription,
+      quantity: line.quantity,
+      unitPrice: line.unitPrice,
+      totalPrice: line.totalPrice,
+      currency: form.currency,
+    }));
+    const subtotal = piLines.reduce((sum, row) => sum + row.totalPrice, 0);
+    const newPr: ProcurPrOrder = {
+      id: typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `procur-pr-${Date.now()}`,
+      prNumber: `PR-${Math.floor(Math.random() * 9000 + 1000)}`,
+      projectId: project.id,
+      projectName: project.name,
+      source: form.source,
+      piNumber: selectedPi.piNumber || form.piNumber || selectedPi.id,
+      piAttachment: form.piAttachment || "No file attached",
+      supplier: form.supplier,
+      billTo: form.billTo,
+      currency: form.currency,
+      businessUnit: form.businessUnit,
+      department: form.department,
+      milestone: form.milestone,
+      manufacturer: form.manufacturer,
+      description: form.description,
+      status: "Pending Approval",
+      createdAt: new Date().toISOString(),
+      piLines,
+      subtotal,
+    };
+    setPrOrders((prev) => {
+      const nextPrOrders = [newPr, ...prev];
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(procurPrStorageKey, JSON.stringify(nextPrOrders));
+      }
+      return nextPrOrders;
+    });
+    setSelectedProjectId(project.id);
+    setSelectedPrId(newPr.id);
+    setCreateOpen(false);
+    setNotice(`${newPr.prNumber} created and added to PR Order List for ${project.name}.`);
+  }, [form, projectOptionsWithPi, projectPiByProject, procurPrStorageKey]);
+
+  const handleCreateRfq = useCallback(() => {
+    if (!rfqForm.dueDate) {
+      setNotice("RFQ due date is required.");
+      return;
+    }
+    const newRfq: ProcurRfqRecord = {
+      id: typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `procur-rfq-${Date.now()}`,
+      rfqNumber: `RFQ-${Math.floor(Math.random() * 9000 + 1000)}`,
+      projectId: rfqForm.projectId,
+      supplier: rfqForm.supplier,
+      dueDate: rfqForm.dueDate,
+      status: "Draft",
+    };
+    setRfqRows((prev) => [newRfq, ...prev]);
+    setSelectedProjectId(rfqForm.projectId);
+    setRfqCreateOpen(false);
+    setNotice(`${newRfq.rfqNumber} created.`);
+  }, [rfqForm]);
+
+  const handleCreatePo = useCallback(() => {
+    const totalAmount = Number(poForm.totalAmount);
+    if (!Number.isFinite(totalAmount) || totalAmount <= 0) {
+      setNotice("PO total amount must be greater than 0.");
+      return;
+    }
+    const newPo: ProcurPoRecord = {
+      id: typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `procur-po-${Date.now()}`,
+      poNumber: `PO-${Math.floor(Math.random() * 9000 + 1000)}`,
+      projectId: poForm.projectId,
+      supplier: poForm.supplier,
+      totalAmount,
+      status: "Pending Approval",
+    };
+    setPoRows((prev) => [newPo, ...prev]);
+    setSelectedProjectId(poForm.projectId);
+    setPoCreateOpen(false);
+    setNotice(`${newPo.poNumber} created.`);
+  }, [poForm]);
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          type="button"
+          size="sm"
+          variant={activeSubModule === "PR" ? "default" : "outline"}
+          onClick={() => {
+            setActiveSubModule("PR");
+            setCreateOpen(false);
+            setNotice(null);
+          }}
+        >
+          PR
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant={activeSubModule === "RFQ" ? "default" : "outline"}
+          onClick={() => {
+            setActiveSubModule("RFQ");
+            setRfqCreateOpen(true);
+            setNotice(null);
+          }}
+        >
+          RFQ
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant={activeSubModule === "PO" ? "default" : "outline"}
+          onClick={() => {
+            setActiveSubModule("PO");
+            setPoCreateOpen(true);
+            setNotice(null);
+          }}
+        >
+          PO
+        </Button>
+      </div>
+      {activeSubModule === "PR" ? (
+      <>
+      <Card className="shadow-none">
+        <CardHeader className="flex flex-row items-start justify-between">
+          <div>
+            <CardTitle>PR Order List</CardTitle>
+            <p className="text-xs text-muted-foreground">PR records grouped by project context.</p>
+          </div>
+          <CardAction>
+            <Button type="button" size="sm" onClick={() => setCreateOpen(true)}>
+              Create PR
+            </Button>
+          </CardAction>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex items-center gap-2 text-xs">
+            <span className="text-muted-foreground">Project</span>
+            <select
+              className="h-8 rounded-md border border-input bg-background px-2"
+              value={selectedProjectId}
+              onChange={(e) => setSelectedProjectId(e.target.value)}
+            >
+              {projectOptionsWithPi.length === 0 ? (
+                <option value="">No projects created in Project module</option>
+              ) : (
+                projectOptionsWithPi.map((project) => (
+                  <option key={project.id} value={project.id}>
+                    {project.name}
+                  </option>
+                ))
+              )}
+            </select>
+          </div>
+          <div className="overflow-x-auto rounded-md border">
+            <table className="min-w-full text-xs">
+              <thead className="bg-muted/50 text-muted-foreground">
+                <tr>
+                  <th className="px-2 py-2 text-left font-medium">PR Number</th>
+                  <th className="px-2 py-2 text-left font-medium">PI Number</th>
+                  <th className="px-2 py-2 text-left font-medium">Supplier</th>
+                  <th className="px-2 py-2 text-left font-medium">Milestone</th>
+                  <th className="px-2 py-2 text-left font-medium">Status</th>
+                  <th className="px-2 py-2 text-right font-medium">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {projectPrOrders.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="px-2 py-4 text-center text-muted-foreground">
+                      No PR created yet for this project.
+                    </td>
+                  </tr>
+                ) : (
+                  projectPrOrders.map((row) => (
+                    <tr key={row.id} className="border-t">
+                      <td className="px-2 py-2">{row.prNumber}</td>
+                      <td className="px-2 py-2">{row.piNumber}</td>
+                      <td className="px-2 py-2">{row.supplier}</td>
+                      <td className="px-2 py-2">{row.milestone || "—"}</td>
+                      <td className="px-2 py-2">
+                        <StatusBadge value={row.status} />
+                      </td>
+                      <td className="px-2 py-2 text-right">
+                        <Button type="button" variant="outline" size="sm" className="h-7" onClick={() => setSelectedPrId(row.id)}>
+                          View Details
+                        </Button>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </CardContent>
+      </Card>
+
+      {createOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-4xl rounded-lg border bg-background shadow-lg">
+            <div className="flex items-center justify-between border-b px-5 py-3">
+              <div>
+                <h2 className="text-sm font-semibold">Create PR</h2>
+                <p className="text-xs text-muted-foreground">Fill PR details and submit to PR Order List.</p>
+              </div>
+              <Button type="button" variant="ghost" size="icon" onClick={() => setCreateOpen(false)}>
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+            <div className="space-y-3 p-5 text-xs">
+              <div className="grid gap-3 md:grid-cols-3">
+                <div className="space-y-1">
+                  <label className="font-medium">Source</label>
+                  <select className="h-9 w-full rounded-md border border-input bg-background px-2" value={form.source} onChange={(e) => setForm((prev) => ({ ...prev, source: e.target.value as ProcurSource }))}>
+                    <option value="Office">Office</option><option value="Project">Project</option><option value="Department">Department</option>
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="font-medium">Project</label>
+                  <select className="h-9 w-full rounded-md border border-input bg-background px-2" value={form.projectId} onChange={(e) => setForm((prev) => ({ ...prev, projectId: e.target.value }))}>
+                    {projectOptionsWithPi.length === 0 ? (
+                      <option value="">No projects created in Project module</option>
+                    ) : (
+                      projectOptionsWithPi.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)
+                    )}
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="font-medium">PI Number</label>
+                  <select
+                    className="h-9 w-full rounded-md border border-input bg-background px-2"
+                    value={form.piNumber}
+                    onChange={(e) => setForm((prev) => ({ ...prev, piNumber: e.target.value }))}
+                  >
+                    {selectedProjectPiRows.length === 0 ? (
+                      <option value="">No PI generated in Project module</option>
+                    ) : (
+                      selectedProjectPiRows.map((pi) => (
+                        <option key={pi.id} value={pi.piNumber || pi.id}>
+                          {pi.piNumber || `PI ${pi.id.slice(0, 8)}`}
+                        </option>
+                      ))
+                    )}
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="font-medium">PI Attachment</label>
+                  <Input className="h-9" placeholder="e.g. PI-1001.pdf" value={form.piAttachment} onChange={(e) => setForm((prev) => ({ ...prev, piAttachment: e.target.value }))} />
+                </div>
+                <div className="space-y-1">
+                  <label className="font-medium">Supplier</label>
+                  <select className="h-9 w-full rounded-md border border-input bg-background px-2" value={form.supplier} onChange={(e) => setForm((prev) => ({ ...prev, supplier: e.target.value }))}>
+                    {supplierOptions.map((value) => <option key={value} value={value}>{value}</option>)}
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="font-medium">Bill To</label>
+                  <select className="h-9 w-full rounded-md border border-input bg-background px-2" value={form.billTo} onChange={(e) => setForm((prev) => ({ ...prev, billTo: e.target.value }))}>
+                    {billToOptions.map((value) => <option key={value} value={value}>{value}</option>)}
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="font-medium">Currency</label>
+                  <select className="h-9 w-full rounded-md border border-input bg-background px-2" value={form.currency} onChange={(e) => setForm((prev) => ({ ...prev, currency: e.target.value }))}>
+                    {currencyOptions.map((value) => <option key={value} value={value}>{value}</option>)}
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="font-medium">Business Unit</label>
+                  <select className="h-9 w-full rounded-md border border-input bg-background px-2" value={form.businessUnit} onChange={(e) => setForm((prev) => ({ ...prev, businessUnit: e.target.value }))}>
+                    {businessUnitOptions.map((value) => <option key={value} value={value}>{value}</option>)}
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="font-medium">Department</label>
+                  <select className="h-9 w-full rounded-md border border-input bg-background px-2" value={form.department} onChange={(e) => setForm((prev) => ({ ...prev, department: e.target.value }))}>
+                    {departmentOptions.map((value) => <option key={value} value={value}>{value}</option>)}
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="font-medium">Milestone</label>
+                  <Input className="h-9" placeholder="e.g. M1 - Mobilization" value={form.milestone} onChange={(e) => setForm((prev) => ({ ...prev, milestone: e.target.value }))} />
+                </div>
+                <div className="space-y-1">
+                  <label className="font-medium">Manufacturer</label>
+                  <select className="h-9 w-full rounded-md border border-input bg-background px-2" value={form.manufacturer} onChange={(e) => setForm((prev) => ({ ...prev, manufacturer: e.target.value }))}>
+                    {manufacturerOptions.map((value) => <option key={value} value={value}>{value}</option>)}
+                  </select>
+                </div>
+                <div className="space-y-1 md:col-span-2">
+                  <label className="font-medium">Description</label>
+                  <textarea className="min-h-[36px] w-full rounded-md border border-input bg-background px-2 py-2" placeholder="PR description" value={form.description} onChange={(e) => setForm((prev) => ({ ...prev, description: e.target.value }))} />
+                </div>
+              </div>
+              <div className="flex justify-end gap-2">
+                <Button type="button" variant="outline" size="sm" onClick={() => setCreateOpen(false)}>Cancel</Button>
+                <Button type="button" size="sm" onClick={handleCreatePr}>Submit PR</Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {selectedPr ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-6xl rounded-lg border bg-background shadow-lg">
+            <div className="flex items-center justify-between border-b px-5 py-3">
+              <div>
+                <h2 className="text-sm font-semibold">PR Detail View</h2>
+                <p className="text-xs text-muted-foreground">Project team, PI line details, and PR summary.</p>
+              </div>
+              <Button type="button" variant="ghost" size="icon" onClick={() => setSelectedPrId(null)}>
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+            <div className="space-y-3 p-5">
+              <div className="space-y-2">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Project Personnel</p>
+                <div className="rounded-md border">
+                  {selectedProjectTeam.length === 0 ? (
+                    <p className="px-3 py-3 text-xs text-muted-foreground">No assigned personnel found from Project module for this project.</p>
+                  ) : (
+                    selectedProjectTeam.map((member) => (
+                      <div key={member.id} className="flex items-center justify-between border-t px-3 py-2 text-xs first:border-t-0">
+                        <span className="font-medium">{member.name}</span>
+                        <span className="text-muted-foreground">{member.role}</span>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">PI Details</p>
+                <div className="overflow-x-auto rounded-md border">
+                  <table className="min-w-full text-xs">
+                    <thead className="bg-muted/50 text-muted-foreground">
+                      <tr>
+                        <th className="px-2 py-2 text-left font-medium">Part Number</th>
+                        <th className="px-2 py-2 text-left font-medium">Item Description</th>
+                        <th className="px-2 py-2 text-right font-medium">Quantity</th>
+                        <th className="px-2 py-2 text-right font-medium">Unit Price</th>
+                        <th className="px-2 py-2 text-right font-medium">Total Price</th>
+                        <th className="px-2 py-2 text-left font-medium">Currency</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {selectedPrPiLines.length === 0 ? (
+                        <tr>
+                          <td colSpan={6} className="px-2 py-4 text-center text-muted-foreground">
+                            No PI rows found for the selected PR.
+                          </td>
+                        </tr>
+                      ) : (
+                        selectedPrPiLines.map((line, idx) => (
+                          <tr key={`${selectedPr.id}-${line.partNumber}-${idx}`} className="border-t">
+                            <td className="px-2 py-2">{line.partNumber}</td>
+                            <td className="px-2 py-2">{line.itemDescription}</td>
+                            <td className="px-2 py-2 text-right">{line.quantity.toLocaleString()}</td>
+                            <td className="px-2 py-2 text-right">{line.unitPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
+                            <td className="px-2 py-2 text-right">{line.totalPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
+                            <td className="px-2 py-2">{line.currency}</td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div className="rounded-md border p-3 text-xs">
+                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Summary</p>
+                <div className="grid gap-2 md:grid-cols-4">
+                  <div>
+                    <p className="text-muted-foreground">Product Type</p>
+                    <p className="font-medium">{selectedPr.businessUnit}</p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground">Bill To</p>
+                    <p className="font-medium">{selectedPr.billTo}</p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground">Current Status</p>
+                    <StatusBadge value={selectedPr.status} />
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground">Subtotal</p>
+                    <p className="font-medium">
+                      {selectedPrSubtotal.toLocaleString(undefined, { maximumFractionDigits: 2 })} {selectedPr.currency}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      </>
+      ) : null}
+
+      {activeSubModule === "RFQ" ? (
+        <Card className="shadow-none">
+          <CardHeader className="flex flex-row items-start justify-between">
+            <div>
+              <CardTitle>Request for Quotation (RFQ)</CardTitle>
+              <p className="text-xs text-muted-foreground">Create and track RFQs independently from PR and PO.</p>
+            </div>
+            <CardAction>
+              <Button type="button" size="sm" onClick={() => setRfqCreateOpen((prev) => !prev)}>
+                {rfqCreateOpen ? "Close Form" : "Create RFQ"}
+              </Button>
+            </CardAction>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {rfqCreateOpen ? (
+              <div className="grid gap-3 rounded-md border p-3 text-xs md:grid-cols-4">
+                <select className="h-9 rounded-md border border-input bg-background px-2" value={rfqForm.projectId} onChange={(e) => setRfqForm((prev) => ({ ...prev, projectId: e.target.value }))}>
+                  {projectOptions.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
+                </select>
+                <select className="h-9 rounded-md border border-input bg-background px-2" value={rfqForm.supplier} onChange={(e) => setRfqForm((prev) => ({ ...prev, supplier: e.target.value }))}>
+                  {supplierOptions.map((s) => <option key={s} value={s}>{s}</option>)}
+                </select>
+                <Input className="h-9" type="date" value={rfqForm.dueDate} onChange={(e) => setRfqForm((prev) => ({ ...prev, dueDate: e.target.value }))} />
+                <Button type="button" size="sm" onClick={handleCreateRfq}>Submit RFQ</Button>
+              </div>
+            ) : null}
+            <div className="overflow-x-auto rounded-md border">
+              <table className="min-w-full text-xs">
+                <thead className="bg-muted/50 text-muted-foreground">
+                  <tr>
+                    <th className="px-2 py-2 text-left font-medium">RFQ Number</th>
+                    <th className="px-2 py-2 text-left font-medium">Project</th>
+                    <th className="px-2 py-2 text-left font-medium">Supplier</th>
+                    <th className="px-2 py-2 text-left font-medium">Due Date</th>
+                    <th className="px-2 py-2 text-left font-medium">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {projectRfqRows.length === 0 ? (
+                    <tr><td colSpan={5} className="px-2 py-4 text-center text-muted-foreground">No RFQ created for this project.</td></tr>
+                  ) : projectRfqRows.map((row) => (
+                    <tr key={row.id} className="border-t">
+                      <td className="px-2 py-2">{row.rfqNumber}</td>
+                      <td className="px-2 py-2">{projectOptions.find((p) => p.id === row.projectId)?.name ?? row.projectId}</td>
+                      <td className="px-2 py-2">{row.supplier}</td>
+                      <td className="px-2 py-2">{row.dueDate}</td>
+                      <td className="px-2 py-2"><StatusBadge value={row.status} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {activeSubModule === "PO" ? (
+        <Card className="shadow-none">
+          <CardHeader className="flex flex-row items-start justify-between">
+            <div>
+              <CardTitle>Purchase Order (PO)</CardTitle>
+              <p className="text-xs text-muted-foreground">Create and track POs independently from PR and RFQ.</p>
+            </div>
+            <CardAction>
+              <Button type="button" size="sm" onClick={() => setPoCreateOpen((prev) => !prev)}>
+                {poCreateOpen ? "Close Form" : "Create PO"}
+              </Button>
+            </CardAction>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {poCreateOpen ? (
+              <div className="grid gap-3 rounded-md border p-3 text-xs md:grid-cols-4">
+                <select className="h-9 rounded-md border border-input bg-background px-2" value={poForm.projectId} onChange={(e) => setPoForm((prev) => ({ ...prev, projectId: e.target.value }))}>
+                  {projectOptions.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
+                </select>
+                <select className="h-9 rounded-md border border-input bg-background px-2" value={poForm.supplier} onChange={(e) => setPoForm((prev) => ({ ...prev, supplier: e.target.value }))}>
+                  {supplierOptions.map((s) => <option key={s} value={s}>{s}</option>)}
+                </select>
+                <Input className="h-9" type="number" min="0" placeholder="Total amount" value={poForm.totalAmount} onChange={(e) => setPoForm((prev) => ({ ...prev, totalAmount: e.target.value }))} />
+                <Button type="button" size="sm" onClick={handleCreatePo}>Submit PO</Button>
+              </div>
+            ) : null}
+            <div className="overflow-x-auto rounded-md border">
+              <table className="min-w-full text-xs">
+                <thead className="bg-muted/50 text-muted-foreground">
+                  <tr>
+                    <th className="px-2 py-2 text-left font-medium">PO Number</th>
+                    <th className="px-2 py-2 text-left font-medium">Project</th>
+                    <th className="px-2 py-2 text-left font-medium">Supplier</th>
+                    <th className="px-2 py-2 text-right font-medium">Total Amount</th>
+                    <th className="px-2 py-2 text-left font-medium">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {projectPoRows.length === 0 ? (
+                    <tr><td colSpan={5} className="px-2 py-4 text-center text-muted-foreground">No PO created for this project.</td></tr>
+                  ) : projectPoRows.map((row) => (
+                    <tr key={row.id} className="border-t">
+                      <td className="px-2 py-2">{row.poNumber}</td>
+                      <td className="px-2 py-2">{projectOptions.find((p) => p.id === row.projectId)?.name ?? row.projectId}</td>
+                      <td className="px-2 py-2">{row.supplier}</td>
+                      <td className="px-2 py-2 text-right">{row.totalAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
+                      <td className="px-2 py-2"><StatusBadge value={row.status} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {notice ? <p className="text-xs text-muted-foreground">{notice}</p> : null}
+    </div>
+  );
+}
+
 function SourcingModule() {
   type SourcingModuleTab = "Source" | "Settings";
   type SourcingSettingsCategorySegment = "supplier" | "manufacturer";
@@ -7401,6 +8209,7 @@ type ProjectPiLine = {
 
 type ProjectPiRecord = {
   id: string;
+  piNumber: string;
   projectId: string;
   projectName: string;
   createdAt: string;
@@ -7462,6 +8271,7 @@ function ProjectModule() {
   const [form, setForm] = useState<ProjectFormValues>(createEmptyProjectForm());
   const [formError, setFormError] = useState<string | null>(null);
   const [projects, setProjects] = useState<ProjectRecord[]>([]);
+  const projectRecordsStorageKey = "scm.project.records.v1";
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [costProjectId, setCostProjectId] = useState<string>("");
   const [costSection, setCostSection] = useState<ProjectCostSection>("boq");
@@ -7469,6 +8279,7 @@ function ProjectModule() {
   const [boqNotice, setBoqNotice] = useState<string | null>(null);
   const [boqByProject, setBoqByProject] = useState<Record<string, ProjectBoqItem[]>>({});
   const [piByProject, setPiByProject] = useState<Record<string, ProjectPiRecord[]>>({});
+  const projectPiStorageKey = "scm.project.piByProject.v1";
   const [piNotice, setPiNotice] = useState<string | null>(null);
   const [budgetLines, setBudgetLines] = useState<ProjectBudgetLine[]>([]);
   const [budgetDraft, setBudgetDraft] = useState({
@@ -7653,6 +8464,44 @@ function ProjectModule() {
     () => budgetLines.filter((line) => line.scopeType === "Project"),
     [budgetLines],
   );
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const rawProjects = window.localStorage.getItem(projectRecordsStorageKey);
+      if (!rawProjects) return;
+      const parsedProjects = JSON.parse(rawProjects) as unknown;
+      if (Array.isArray(parsedProjects)) {
+        setProjects(parsedProjects as ProjectRecord[]);
+      }
+    } catch {
+      // Ignore invalid persisted Project records payload and continue with defaults.
+    }
+  }, [projectRecordsStorageKey]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(projectRecordsStorageKey, JSON.stringify(projects));
+  }, [projectRecordsStorageKey, projects]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const raw = window.localStorage.getItem(projectPiStorageKey);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as unknown;
+      if (parsed && typeof parsed === "object") {
+        setPiByProject(parsed as Record<string, ProjectPiRecord[]>);
+      }
+    } catch {
+      // Ignore invalid persisted PI payload and continue with defaults.
+    }
+  }, [projectPiStorageKey]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(projectPiStorageKey, JSON.stringify(piByProject));
+  }, [piByProject, projectPiStorageKey]);
   const departmentBudgetLines = useMemo(
     () => budgetLines.filter((line) => line.scopeType === "Department"),
     [budgetLines],
@@ -7821,8 +8670,10 @@ function ProjectModule() {
         totalPrice,
       };
     });
+    const nextPiNumber = `PI-${String((piByProject[costSelectedProject.id]?.length ?? 0) + 1).padStart(4, "0")}`;
     const piRecord: ProjectPiRecord = {
       id: typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `pi-${Date.now()}`,
+      piNumber: nextPiNumber,
       projectId: costSelectedProject.id,
       projectName: `${costSelectedProject.projectId} - ${costSelectedProject.projectName}`,
       createdAt: new Date().toISOString(),
@@ -7837,7 +8688,7 @@ function ProjectModule() {
     setPiNotice(
       `PI generated for ${costSelectedProject.projectId} with ${lines.length} item${lines.length === 1 ? "" : "s"}.`,
     );
-  }, [canGenerateProjectPi, costSelectedProject, currentUserName, selectedProjectBoqRows]);
+  }, [canGenerateProjectPi, costSelectedProject, currentUserName, piByProject, selectedProjectBoqRows]);
 
   const onSubmit = useCallback(
     (e: React.FormEvent<HTMLFormElement>) => {
@@ -8194,7 +9045,9 @@ function ProjectModule() {
                       visibleProjectPiRows.map((pi) => (
                         <div key={pi.id} className="space-y-2 rounded-md border p-2">
                           <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-muted-foreground">
-                            <span>{pi.projectName}</span>
+                            <span>
+                              {pi.projectName} - {pi.piNumber || `PI ${pi.id.slice(0, 8)}`}
+                            </span>
                             <span>
                               Created by {pi.createdBy} on {new Date(pi.createdAt).toLocaleString()}
                             </span>
@@ -9729,6 +10582,7 @@ export default function Home() {
               grnRequests={grnRequests}
             />
           )}
+          {activeModule === "Procur" && <ProcurModule />}
           {activeModule === "Project" && <ProjectModule />}
           {activeModule === "Sourcing" && <SourcingModule />}
           {activeModule === "Inventory" && (
