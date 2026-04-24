@@ -54,6 +54,20 @@ type InvMovement = {
 type InvMovementUiKind = "receive" | "issue" | "transfer" | "return";
 type InvRequestMode = "single" | "bulk";
 type ReturnReviewStatus = "Pending" | "Approved" | "Received" | "Rejected";
+type ExternalGrnRequest = {
+  id: string;
+  po: string;
+  supplier: string;
+  status: "Pending Confirmation" | "Confirmed";
+  requestedAt: string;
+  confirmedAt: string | null;
+  items: Array<{
+    itemName: string;
+    quantity: number;
+    uom: string;
+    unitPrice: number;
+  }>;
+};
 type InvRequestRecord = {
   id: string;
   itemName: string;
@@ -191,7 +205,13 @@ function SummaryCard({ label, value, icon: Icon }: { label: string; value: strin
   );
 }
 
-export function InventoryModule() {
+export function InventoryModule({
+  grnRequests = [],
+  onConfirmGrnRequest,
+}: {
+  grnRequests?: ExternalGrnRequest[];
+  onConfirmGrnRequest?: (requestId: string) => void;
+}) {
   const [tab, setTab] = useState<InventoryTab>("Overview");
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
 
@@ -320,6 +340,10 @@ export function InventoryModule() {
       reference: "PO-1002",
     },
   ]);
+  const pendingExternalGrnRequests = useMemo(
+    () => grnRequests.filter((row) => row.status === "Pending Confirmation"),
+    [grnRequests],
+  );
 
   const [movementModalOpen, setMovementModalOpen] = useState(false);
   const [addItemModalOpen, setAddItemModalOpen] = useState(false);
@@ -878,6 +902,34 @@ export function InventoryModule() {
       setStockNotice(`Return request ${movementId} rejected.`);
     },
     [returnReviewById, todayStr],
+  );
+
+  const confirmExternalGrnRequest = useCallback(
+    (requestId: string) => {
+      const request = grnRequests.find((row) => row.id === requestId && row.status === "Pending Confirmation");
+      if (!request) return;
+      setMovements((prev) => {
+        const next = [...prev];
+        for (const item of request.items) {
+          if (item.quantity <= 0) continue;
+          next.unshift({
+            id: nextMovementId(next),
+            itemName: item.itemName,
+            type: "In",
+            transactionType: "GRN receipt (from approved PO)",
+            quantity: item.quantity,
+            fromLocationId: null,
+            toLocationId: "loc-1",
+            date: todayStr,
+            reference: request.po,
+          });
+        }
+        return next;
+      });
+      onConfirmGrnRequest?.(requestId);
+      setStockNotice(`Inventory Stock Keeper confirmed GRN request for ${request.po}. Items were added to Inventory GRN.`);
+    },
+    [grnRequests, onConfirmGrnRequest, todayStr],
   );
 
   const editStockRows = useCallback((ids: string[]) => {
@@ -1657,6 +1709,43 @@ export function InventoryModule() {
 
       {tab === "GRN" && (
         <div className="space-y-6">
+          <div className="overflow-x-auto rounded-lg bg-card shadow-sm ring-1 ring-slate-100/80">
+            <table className="w-full min-w-[760px] text-left text-xs">
+              <thead>
+                <tr className="text-muted-foreground">
+                  <th className="px-4 py-3 font-medium">PO</th>
+                  <th className="px-4 py-3 font-medium">Supplier</th>
+                  <th className="px-4 py-3 font-medium">Requested At</th>
+                  <th className="px-4 py-3 font-medium">Approved Items</th>
+                  <th className="px-4 py-3 font-medium">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {pendingExternalGrnRequests.length === 0 ? (
+                  <tr>
+                    <td className="px-4 py-6 text-center text-muted-foreground" colSpan={5}>
+                      No pending GRN requests waiting for stock keeper confirmation.
+                    </td>
+                  </tr>
+                ) : (
+                  pendingExternalGrnRequests.map((request) => (
+                    <tr key={request.id} className="border-t border-border/60">
+                      <td className="px-4 py-3 font-medium text-foreground">{request.po}</td>
+                      <td className="px-4 py-3 text-muted-foreground">{request.supplier}</td>
+                      <td className="px-4 py-3 text-muted-foreground">{request.requestedAt}</td>
+                      <td className="px-4 py-3 tabular-nums">{request.items.length}</td>
+                      <td className="px-4 py-3">
+                        <Button type="button" size="sm" className="h-8" onClick={() => confirmExternalGrnRequest(request.id)}>
+                          Confirm
+                        </Button>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+
           <div className="overflow-x-auto rounded-lg bg-card shadow-sm ring-1 ring-slate-100/80">
             <table className="w-full min-w-[860px] text-left text-xs">
               <thead>

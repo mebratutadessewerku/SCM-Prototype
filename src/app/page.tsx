@@ -1189,6 +1189,21 @@ type CreatedPoRecord = {
   createdAt: string;
 };
 
+type GrnRequestRecord = {
+  id: string;
+  po: string;
+  supplier: string;
+  status: "Pending Confirmation" | "Confirmed";
+  requestedAt: string;
+  confirmedAt: string | null;
+  items: Array<{
+    itemName: string;
+    quantity: number;
+    uom: string;
+    unitPrice: number;
+  }>;
+};
+
 type PoFormInitialData = {
   sourceKind: "project" | "department";
   projectKey: string | null;
@@ -2489,20 +2504,24 @@ function ProcurementModule({
   onOpenDrawer,
   onSubmitForApproval,
   onCreatePo,
+  onCreateGrnRequest,
   createdPrs,
   createdRfqs,
   setCreatedRfqs,
   createdPos,
   createdMasterDataRows,
+  grnRequests,
 }: {
   onOpenDrawer: (key: DrawerKey) => void;
   onSubmitForApproval: (payload: SubmitApprovalDocumentInput) => string | null;
   onCreatePo: (record: CreatedPoRecord) => void;
+  onCreateGrnRequest: (payload: Omit<GrnRequestRecord, "id" | "requestedAt" | "status" | "confirmedAt">) => void;
   createdPrs: CreatedPrRecord[];
   createdRfqs: CreatedRfqRecord[];
   setCreatedRfqs: Dispatch<SetStateAction<CreatedRfqRecord[]>>;
   createdPos: CreatedPoRecord[];
   createdMasterDataRows: ItemMasterRow[];
+  grnRequests: GrnRequestRecord[];
 }) {
   type UserRole = "All" | "Field Engineer" | "Team Lead" | "Sourcing Officer" | "Logistics Officer" | "Approver";
   type PrRow = {
@@ -2577,6 +2596,7 @@ function ProcurementModule({
     totalAmount?: number;
     deliveryTerms?: string;
     paymentTerms?: string;
+    generatedAt?: string;
     showSubmitApproval?: true;
     createdAt?: string;
   };
@@ -3021,6 +3041,13 @@ function ProcurementModule({
     if (activeRole === "Sourcing Officer" || activeRole === "Team Lead" || activeRole === "Logistics Officer" || activeRole === "Approver") return filteredPoRows;
     return [];
   }, [filteredPoRows, activeRole]);
+  const grnRequestByPo = useMemo(() => {
+    const map = new Map<string, GrnRequestRecord>();
+    for (const req of grnRequests) {
+      map.set(req.po, req);
+    }
+    return map;
+  }, [grnRequests]);
 
   const activeRfq = useMemo(() => rfqRows.find((r) => r.rfq === activeRfqId) ?? null, [rfqRows, activeRfqId]);
 
@@ -4392,9 +4419,49 @@ function ProcurementModule({
                               {row.approval === "Rejected" && activeRole === "Sourcing Officer" ? (
                                 <DropdownMenuItem onClick={() => setPoEditRow(row)}>Edit / Revise</DropdownMenuItem>
                               ) : null}
-                              {row.approval === "Approved" && activeRole === "Sourcing Officer" ? (
-                                <DropdownMenuItem onClick={() => setPoGenerateRow(row)}>
+                              {row.approval === "Approved" && activeRole === "Sourcing Officer" && !row.generatedAt ? (
+                                <DropdownMenuItem
+                                  onClick={() => {
+                                    const generatedAt = new Date().toISOString();
+                                    setPoRows((prev) =>
+                                      prev.map((po) => (po.po === row.po ? { ...po, generatedAt } : po)),
+                                    );
+                                    setPoGenerateRow({ ...row, generatedAt });
+                                    setApprovalNotice(`${row.po} generated. You can now submit GRN Request.`);
+                                  }}
+                                >
                                   Generate
+                                </DropdownMenuItem>
+                              ) : null}
+                              {row.approval === "Approved" && activeRole === "Sourcing Officer" && !!row.generatedAt ? (
+                                <DropdownMenuItem
+                                  disabled={grnRequestByPo.has(row.po)}
+                                  onClick={() => {
+                                    const items = (row.lineItems ?? [])
+                                      .map((li) => ({
+                                        itemName: li.name?.trim() || row.requestType,
+                                        quantity: Number.parseFloat(li.quantity || "0") || 0,
+                                        uom: "pcs",
+                                        unitPrice: Number.isFinite(li.price) ? li.price : 0,
+                                      }))
+                                      .filter((li) => li.quantity > 0);
+                                    if (items.length === 0) {
+                                      setApprovalNotice(`${row.po} has no approved line items to move to Inventory GRN.`);
+                                      return;
+                                    }
+                                    onCreateGrnRequest({
+                                      po: row.po,
+                                      supplier: row.supplier,
+                                      items,
+                                    });
+                                    setApprovalNotice(`${row.po} GRN request submitted. Awaiting Inventory Stock Keeper confirmation.`);
+                                  }}
+                                >
+                                  {grnRequestByPo.get(row.po)?.status === "Confirmed"
+                                    ? "Sent to Inventory GRN"
+                                    : grnRequestByPo.get(row.po)?.status === "Pending Confirmation"
+                                      ? "GRN Requested"
+                                      : "GRN Request"}
                                 </DropdownMenuItem>
                               ) : null}
                             </DropdownMenuContent>
@@ -5316,6 +5383,10 @@ function ProcurementModule({
                 <div>
                   <p className="text-[11px] text-muted-foreground">PO Number</p>
                   <p className="font-semibold text-foreground">{poGenerateRow.po}</p>
+                </div>
+                <div>
+                  <p className="text-[11px] text-muted-foreground">Generated At</p>
+                  <p className="font-semibold text-foreground">{poGenerateRow.generatedAt ? new Date(poGenerateRow.generatedAt).toLocaleString() : "—"}</p>
                 </div>
                 <div>
                   <p className="text-[11px] text-muted-foreground">Supplier Information</p>
@@ -7276,9 +7347,14 @@ function SourcingModule() {
 }
 
 type ProjectFormValues = {
+  projectId: string;
   projectName: string;
+  projectManager: string;
+  projectStatus: "Draft" | "Active" | "Completed" | "Cancelled";
   client: string;
   businessUnit: string;
+  projectType: "" | "Product" | "Service" | "Training";
+  departmentType: "" | "Product" | "Service" | "Training";
   sector: string;
   role: string;
   memberName: string;
@@ -7295,15 +7371,51 @@ type ProjectFormValues = {
   newOpportunity: boolean;
 };
 
+type ProjectBoqItem = {
+  no: string;
+  itemCode: string;
+  itemDescription: string;
+  uom: string;
+  quantity: number;
+  gptUnitCost: number;
+  gptTotalCost: number;
+  discountPct: number;
+  discountedUnitCost: number;
+  discountedTotalCost: number;
+  freightInsurancePct: number;
+  bankChargesPct: number;
+  importTaxPct: number;
+  marginPct: number;
+  unitPrice: number;
+  totalPrice: number;
+  category: "Local Material" | "Product" | "Service" | "Training";
+};
+
+type ProjectBudgetLine = {
+  id: string;
+  scopeType: "Project" | "Department";
+  targetId: string;
+  targetName: string;
+  category: "Material" | "Service" | "Training";
+  allocated: number;
+  consumed: number;
+  approval: "Pending Approval" | "Approved" | "Rejected";
+};
+
 type ProjectRecord = ProjectFormValues & {
   id: string;
   createdAt: string;
 };
 
 const createEmptyProjectForm = (): ProjectFormValues => ({
+  projectId: "",
   projectName: "",
+  projectManager: "",
+  projectStatus: "Draft",
   client: "",
   businessUnit: "",
+  projectType: "",
+  departmentType: "",
   sector: "",
   role: "",
   memberName: "",
@@ -7323,7 +7435,9 @@ const createEmptyProjectForm = (): ProjectFormValues => ({
 function ProjectModule() {
   type ProjectModalMode = "create" | "view" | "edit";
   type ProjectCostSection = "boq" | "budget";
+  type ProjectSubModule = "management" | "cost" | "boq";
   type BoqCategory = "Local Material" | "Product" | "Service" | "Training";
+  const [projectSubModule, setProjectSubModule] = useState<ProjectSubModule>("management");
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [modalMode, setModalMode] = useState<ProjectModalMode>("create");
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
@@ -7331,22 +7445,37 @@ function ProjectModule() {
   const [formError, setFormError] = useState<string | null>(null);
   const [projects, setProjects] = useState<ProjectRecord[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const [costProjectId, setCostProjectId] = useState<string>("");
   const [costSection, setCostSection] = useState<ProjectCostSection>("boq");
   const [boqCategoryFilter, setBoqCategoryFilter] = useState<"All" | BoqCategory>("All");
   const [boqNotice, setBoqNotice] = useState<string | null>(null);
-  const [boqByProject, setBoqByProject] = useState<Record<string, Array<Record<string, string | number>>>>({});
+  const [boqByProject, setBoqByProject] = useState<Record<string, ProjectBoqItem[]>>({});
+  const [budgetLines, setBudgetLines] = useState<ProjectBudgetLine[]>([]);
+  const [budgetDraft, setBudgetDraft] = useState({
+    level: "Project" as "Project" | "Department",
+    targetProjectId: "",
+    targetDepartmentKey: "",
+    category: "Material" as "Material" | "Service" | "Training",
+    allocated: "",
+  });
   const boqUploadInputRef = useRef<HTMLInputElement | null>(null);
   const readOnly = modalMode === "view";
   const boqCategoryOptions: BoqCategory[] = ["Local Material", "Product", "Service", "Training"];
+  const activeCostSection: ProjectCostSection = projectSubModule === "boq" ? "boq" : "budget";
 
   const selectedProject = useMemo(
     () => projects.find((project) => project.id === selectedProjectId) ?? null,
     [projects, selectedProjectId],
   );
 
-  const selectedProjectBoqRows = useMemo(
-    () => (selectedProjectId ? boqByProject[selectedProjectId] ?? [] : []),
-    [boqByProject, selectedProjectId],
+  const selectedProjectBoqRows = useMemo(() => (costProjectId ? boqByProject[costProjectId] ?? [] : []), [boqByProject, costProjectId]);
+  const costSelectedProject = useMemo(
+    () => (costProjectId ? projects.find((project) => project.id === costProjectId) ?? null : null),
+    [projects, costProjectId],
+  );
+  const viewModalBoqRows = useMemo(
+    () => (activeProjectId ? boqByProject[activeProjectId] ?? [] : []),
+    [activeProjectId, boqByProject],
   );
 
   const resetForm = useCallback(() => {
@@ -7374,9 +7503,14 @@ function ProjectModule() {
     setModalMode("view");
     setActiveProjectId(project.id);
     setForm({
+      projectId: project.projectId,
       projectName: project.projectName,
+      projectManager: project.projectManager,
+      projectStatus: project.projectStatus,
       client: project.client,
       businessUnit: project.businessUnit,
+      projectType: project.projectType,
+      departmentType: project.departmentType,
       sector: project.sector,
       role: project.role,
       memberName: project.memberName,
@@ -7400,9 +7534,14 @@ function ProjectModule() {
     setModalMode("edit");
     setActiveProjectId(project.id);
     setForm({
+      projectId: project.projectId,
       projectName: project.projectName,
+      projectManager: project.projectManager,
+      projectStatus: project.projectStatus,
       client: project.client,
       businessUnit: project.businessUnit,
+      projectType: project.projectType,
+      departmentType: project.departmentType,
       sector: project.sector,
       role: project.role,
       memberName: project.memberName,
@@ -7433,38 +7572,28 @@ function ProjectModule() {
     });
   }, []);
 
-  const parseNumericCell = useCallback((row: Record<string, string | number>, keys: string[]) => {
-    for (const key of keys) {
-      const value = row[key];
-      if (typeof value === "number" && Number.isFinite(value)) return value;
-      if (typeof value === "string") {
-        const cleaned = value.replace(/[, $]/g, "").trim();
-        const parsed = Number(cleaned);
-        if (Number.isFinite(parsed)) return parsed;
-      }
-    }
-    return 0;
+  const toNumber = useCallback((value: string | number | undefined) => {
+    if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+    if (!value) return 0;
+    const parsed = Number(String(value).replace(/[%,$\s,]/g, ""));
+    return Number.isFinite(parsed) ? parsed : 0;
   }, []);
 
   const projectBoqComputedRows = useMemo(() => {
     return selectedProjectBoqRows.map((row, idx) => {
-      const quantity = parseNumericCell(row, ["Quantity", "Qty"]);
-      const unitPrice = parseNumericCell(row, ["Unit Price", "GPT. Unit Cost", "Discounted Unit Cost"]);
-      const totalPrice = parseNumericCell(row, ["Total Price", "GPT. Total Cost"]) || quantity * unitPrice;
-      const discountedCosts = parseNumericCell(row, ["Discounted Total Cost"]) || totalPrice;
-      const usedAmount = parseNumericCell(row, ["Used Amount"]);
+      const quantity = row.quantity;
+      const unitPrice = row.unitPrice || row.gptUnitCost || row.discountedUnitCost;
+      const totalPrice = row.totalPrice || row.gptTotalCost || quantity * unitPrice;
+      const discountedCosts = row.discountedTotalCost || totalPrice;
+      const usedAmount = 0;
       const remainingAmount = Math.max(0, discountedCosts - usedAmount);
-      const rawCategory = String(row["Category"] ?? row["Item Category"] ?? "").trim();
-      const inferredCategory: BoqCategory =
-        rawCategory === "Local Material" || rawCategory === "Product" || rawCategory === "Service" || rawCategory === "Training"
-          ? rawCategory
-          : "Product";
+      const inferredCategory: BoqCategory = row.category;
       const status = remainingAmount === 0 ? "Completed" : usedAmount > 0 ? "In Progress" : "Not Started";
 
       return {
-        id: String(row["No."] ?? idx + 1),
-        partNumber: String(row["Item Part Number"] ?? ""),
-        description: String(row["Item Description"] ?? ""),
+        id: String(row.no ?? idx + 1),
+        partNumber: row.itemCode,
+        description: row.itemDescription,
         category: inferredCategory,
         quantity,
         unitPrice,
@@ -7475,29 +7604,48 @@ function ProjectModule() {
         status,
       };
     });
-  }, [parseNumericCell, selectedProjectBoqRows]);
+  }, [selectedProjectBoqRows]);
 
   const filteredProjectBoqRows = useMemo(() => {
     if (boqCategoryFilter === "All") return projectBoqComputedRows;
     return projectBoqComputedRows.filter((row) => row.category === boqCategoryFilter);
   }, [boqCategoryFilter, projectBoqComputedRows]);
+  const projectBudgetLines = useMemo(
+    () => budgetLines.filter((line) => line.scopeType === "Project"),
+    [budgetLines],
+  );
+  const departmentBudgetLines = useMemo(
+    () => budgetLines.filter((line) => line.scopeType === "Department"),
+    [budgetLines],
+  );
+  const budgetConsumedTotal = useMemo(
+    () => projectBoqComputedRows.reduce((sum, row) => sum + row.totalPrice, 0),
+    [projectBoqComputedRows],
+  );
+  const budgetAllocatedTotal = useMemo(
+    () =>
+      projectBudgetLines
+        .filter((line) => line.approval === "Approved" && costSelectedProject && line.targetId === costSelectedProject.id)
+        .reduce((sum, line) => sum + line.allocated, 0),
+    [projectBudgetLines, costSelectedProject],
+  );
 
   const onDownloadBoqTemplate = useCallback(() => {
     const header = [
       "No.",
-      "Item Part Number",
+      "Item Code",
       "Item Description",
       "UOM",
-      "Qty",
-      "GPT. Unit Cost",
-      "GPT. Total Cost",
-      "Discount",
+      "Quantity",
+      "GPT Unit Cost",
+      "GPT Total Cost",
+      "Discount (%)",
       "Discounted Unit Cost",
       "Discounted Total Cost",
-      "Freight Insurance",
-      "Bank Charges",
-      "Import Tax",
-      "Margin",
+      "Freight Insurance (%)",
+      "Bank Charges (%)",
+      "Import Tax (%)",
+      "Margin (%)",
       "Unit Price",
       "Total Price",
     ];
@@ -7556,24 +7704,58 @@ function ProjectModule() {
       const file = e.target.files?.[0];
       if (!file || !activeProjectId) return;
       try {
-        const data = await file.arrayBuffer();
-        const workbook = XLSX.read(data, { type: "array" });
+        const isCsv = /\.csv$/i.test(file.name);
+        const workbook = isCsv
+          ? XLSX.read(await file.text(), { type: "string" })
+          : XLSX.read(await file.arrayBuffer(), { type: "array" });
         const firstSheetName = workbook.SheetNames[0];
         if (!firstSheetName) {
-          setBoqNotice("The selected Excel file has no sheets.");
+          setBoqNotice("The selected BOQ file has no sheets.");
           return;
         }
         const sheet = workbook.Sheets[firstSheetName];
         const rows = XLSX.utils.sheet_to_json<Record<string, string | number>>(sheet, { defval: "" });
-        setBoqByProject((prev) => ({ ...prev, [activeProjectId]: rows }));
-        setBoqNotice(`BoQ uploaded successfully (${rows.length} row${rows.length === 1 ? "" : "s"}).`);
+        const normalized = rows.map((row, idx) => {
+          const itemCode = String(row["Item Code"] ?? row["Item Part Number"] ?? "").trim();
+          return {
+            no: String(row["No."] ?? idx + 1),
+            itemCode,
+            itemDescription: String(row["Item Description"] ?? "").trim(),
+            uom: String(row["UOM"] ?? "").trim(),
+            quantity: toNumber(row["Quantity"] ?? row["Qty"]),
+            gptUnitCost: toNumber(row["GPT Unit Cost"] ?? row["GPT. Unit Cost"]),
+            gptTotalCost: toNumber(row["GPT Total Cost"] ?? row["GPT. Total Cost"]),
+            discountPct: toNumber(row["Discount (%)"] ?? row["Discount"]),
+            discountedUnitCost: toNumber(row["Discounted Unit Cost"]),
+            discountedTotalCost: toNumber(row["Discounted Total Cost"]),
+            freightInsurancePct: toNumber(row["Freight Insurance (%)"] ?? row["Freight Insurance"]),
+            bankChargesPct: toNumber(row["Bank Charges (%)"] ?? row["Bank Charges"]),
+            importTaxPct: toNumber(row["Import Tax (%)"] ?? row["Import Tax"]),
+            marginPct: toNumber(row["Margin (%)"] ?? row["Margin"]),
+            unitPrice: toNumber(row["Unit Price"]),
+            totalPrice: toNumber(row["Total Price"]),
+            category: (String(row["Category"] ?? "Product").trim() as ProjectBoqItem["category"]) || "Product",
+          } as ProjectBoqItem;
+        });
+        const validRows = normalized.filter((row) => row.itemCode && row.itemDescription);
+        if (validRows.length === 0) {
+          setBoqNotice("No valid BOQ rows found. Required: Item Code and Item Description.");
+          return;
+        }
+        const duplicate = validRows.find((row, idx) => validRows.findIndex((v) => v.itemCode.toLowerCase() === row.itemCode.toLowerCase()) !== idx);
+        if (duplicate) {
+          setBoqNotice(`Duplicate Item Code detected in BOQ: ${duplicate.itemCode}. Upload blocked.`);
+          return;
+        }
+        setBoqByProject((prev) => ({ ...prev, [activeProjectId]: validRows }));
+        setBoqNotice(`BoQ uploaded successfully (${validRows.length} row${validRows.length === 1 ? "" : "s"}).`);
       } catch {
-        setBoqNotice("Could not read the selected Excel file. Please use a valid .xlsx/.xls file.");
+        setBoqNotice("Could not read the selected BOQ file. Please use a valid .xlsx/.xls/.csv file.");
       } finally {
         e.target.value = "";
       }
     },
-    [activeProjectId],
+    [activeProjectId, toNumber],
   );
 
   const onSubmit = useCallback(
@@ -7583,12 +7765,15 @@ function ProjectModule() {
         closeCreateModal();
         return;
       }
+      if (!form.projectId.trim()) return setFormError("Project ID is required.");
       if (!form.projectName.trim()) return setFormError("Project Name is required.");
+      if (!form.projectManager.trim()) return setFormError("Project Manager is required.");
       if (!form.client) return setFormError("Client is required.");
       if (!form.businessUnit) return setFormError("Business Unit is required.");
+      if (!form.projectType) return setFormError("Project Type is required.");
+      if (!form.departmentType) return setFormError("Department Type is required.");
       if (!form.sector) return setFormError("Sector is required.");
       if (!form.role) return setFormError("Team role is required.");
-      if (!form.memberName) return setFormError("Member Name is required.");
       if (!form.currency) return setFormError("Currency is required.");
       if (!form.numberOfMilestones) return setFormError("Number of Milestones is required.");
       if (!form.contractSignDate) return setFormError("Contract Sign Date is required.");
@@ -7597,6 +7782,10 @@ function ProjectModule() {
       if (!form.projectEndDate) return setFormError("Project End Date is required.");
       if (!form.lcOpeningDate) return setFormError("LC Opening Date is required.");
       if (!form.advancePaymentDate) return setFormError("Advance Payment Date is required.");
+      const duplicateProjectId = projects.find(
+        (p) => p.projectId.trim().toLowerCase() === form.projectId.trim().toLowerCase() && p.id !== activeProjectId,
+      );
+      if (duplicateProjectId) return setFormError("Project ID already exists. Please use a unique Project ID.");
 
       const parsedValue = Number(form.contractValue);
       if (!Number.isFinite(parsedValue) || parsedValue <= 0) {
@@ -7630,14 +7819,43 @@ function ProjectModule() {
         };
         setProjects((prev) => [newProject, ...prev]);
         setSelectedProjectId(newProject.id);
+        setCostProjectId((prev) => prev || newProject.id);
       }
       closeCreateModal();
     },
-    [activeProjectId, closeCreateModal, form, modalMode, readOnly],
+    [activeProjectId, closeCreateModal, form, modalMode, projects, readOnly],
   );
 
   return (
     <div className="space-y-4">
+      <div className="flex items-center gap-2">
+        <Button type="button" size="sm" variant={projectSubModule === "management" ? "default" : "outline"} onClick={() => setProjectSubModule("management")}>
+          Project Management
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant={projectSubModule === "cost" ? "default" : "outline"}
+          onClick={() => {
+            setProjectSubModule("cost");
+            setCostSection("budget");
+          }}
+        >
+          Cost
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant={projectSubModule === "boq" ? "default" : "outline"}
+          onClick={() => {
+            setProjectSubModule("boq");
+            setCostSection("boq");
+          }}
+        >
+          Project BOQ
+        </Button>
+      </div>
+      {projectSubModule === "management" ? (
       <Card className="shadow-none">
         <CardHeader className="flex flex-row items-center justify-between">
           <div>
@@ -7656,9 +7874,12 @@ function ProjectModule() {
             <table className="w-full text-sm">
               <thead className="bg-muted/50 text-xs text-muted-foreground">
                 <tr>
+                  <th className="px-3 py-2 text-left font-medium">Project ID</th>
                   <th className="px-3 py-2 text-left font-medium">Project Name</th>
+                  <th className="px-3 py-2 text-left font-medium">Project Manager</th>
                   <th className="px-3 py-2 text-left font-medium">Client</th>
                   <th className="px-3 py-2 text-left font-medium">Business Unit</th>
+                  <th className="px-3 py-2 text-left font-medium">Status</th>
                   <th className="px-3 py-2 text-left font-medium">Contract Value</th>
                   <th className="px-3 py-2 text-left font-medium">Start - End</th>
                   <th className="px-3 py-2 text-right font-medium">Actions</th>
@@ -7667,13 +7888,14 @@ function ProjectModule() {
               <tbody>
                 {projects.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="px-3 py-8 text-center text-xs text-muted-foreground">
+                    <td colSpan={9} className="px-3 py-8 text-center text-xs text-muted-foreground">
                       No projects added yet. Use Add Project to create the first entry.
                     </td>
                   </tr>
                 ) : (
                   projects.map((project) => (
                     <tr key={project.id} className="border-t">
+                      <td className="px-3 py-2 font-mono text-[11px]">{project.projectId}</td>
                       <td className="px-3 py-2">
                         <button
                           type="button"
@@ -7686,8 +7908,12 @@ function ProjectModule() {
                           {project.projectName}
                         </button>
                       </td>
+                      <td className="px-3 py-2">{project.projectManager}</td>
                       <td className="px-3 py-2">{project.client}</td>
                       <td className="px-3 py-2">{project.businessUnit}</td>
+                      <td className="px-3 py-2">
+                        <StatusBadge value={project.projectStatus} />
+                      </td>
                       <td className="px-3 py-2">
                         {new Intl.NumberFormat("en-US", { style: "currency", currency: project.currency, maximumFractionDigits: 0 }).format(
                           Number(project.contractValue),
@@ -7713,69 +7939,93 @@ function ProjectModule() {
           </div>
         </CardContent>
       </Card>
+      ) : null}
 
-      {selectedProject ? (
+      {projectSubModule === "cost" || projectSubModule === "boq" ? (
         <Card className="shadow-none">
           <CardHeader>
-            <CardTitle>{selectedProject.projectName}</CardTitle>
+            <CardTitle>{projectSubModule === "cost" ? "Cost Management" : "Project BOQ"}</CardTitle>
             <p className="text-xs text-muted-foreground">
-              {selectedProject.client} • {selectedProject.businessUnit} • {selectedProject.sector}
+              {projectSubModule === "cost"
+                ? "Independent budgeting for projects and departments."
+                : "Manage and view BOQ items by project."}
             </p>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="grid gap-3 md:grid-cols-4">
+            <div className="grid gap-3 md:grid-cols-5">
+              <div className="rounded-md border p-3">
+                <p className="text-[11px] text-muted-foreground">Project Context (optional)</p>
+                <select
+                  className="mt-1 h-8 w-full rounded-md border border-input bg-background px-2 text-xs"
+                  value={costProjectId}
+                  onChange={(e) => setCostProjectId(e.target.value)}
+                >
+                  <option value="">No project selected</option>
+                  {projects.map((project) => (
+                    <option key={project.id} value={project.id}>
+                      {project.projectId} - {project.projectName}
+                    </option>
+                  ))}
+                </select>
+              </div>
               <div className="rounded-md border p-3">
                 <p className="text-[11px] text-muted-foreground">Contract Value</p>
                 <p className="text-sm font-semibold">
-                  {new Intl.NumberFormat("en-US", {
-                    style: "currency",
-                    currency: selectedProject.currency,
-                    maximumFractionDigits: 0,
-                  }).format(Number(selectedProject.contractValue))}
+                  {costSelectedProject
+                    ? new Intl.NumberFormat("en-US", {
+                        style: "currency",
+                        currency: costSelectedProject.currency,
+                        maximumFractionDigits: 0,
+                      }).format(Number(costSelectedProject.contractValue))
+                    : "—"}
                 </p>
               </div>
               <div className="rounded-md border p-3">
                 <p className="text-[11px] text-muted-foreground">Project Timeline</p>
                 <p className="text-sm font-semibold">
-                  {selectedProject.projectStartDate} to {selectedProject.projectEndDate}
+                  {costSelectedProject ? `${costSelectedProject.projectStartDate} to ${costSelectedProject.projectEndDate}` : "—"}
                 </p>
               </div>
               <div className="rounded-md border p-3">
-                <p className="text-[11px] text-muted-foreground">Team Lead Role</p>
-                <p className="text-sm font-semibold">{selectedProject.role}</p>
+                <p className="text-[11px] text-muted-foreground">Project Status</p>
+                <p className="text-sm font-semibold">{costSelectedProject?.projectStatus ?? "—"}</p>
               </div>
               <div className="rounded-md border p-3">
-                <p className="text-[11px] text-muted-foreground">Assigned Member</p>
-                <p className="text-sm font-semibold">{selectedProject.memberName}</p>
+                <p className="text-[11px] text-muted-foreground">Project Manager</p>
+                <p className="text-sm font-semibold">{costSelectedProject?.projectManager ?? "—"}</p>
               </div>
             </div>
 
             <div className="rounded-md border">
               <div className="flex items-center justify-between border-b px-4 py-3">
                 <div>
-                  <p className="text-sm font-semibold">Cost</p>
-                  <p className="text-xs text-muted-foreground">Project cost tracking and planning.</p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Button type="button" size="sm" variant={costSection === "boq" ? "default" : "outline"} onClick={() => setCostSection("boq")}>
-                    Project BOQ
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant={costSection === "budget" ? "default" : "outline"}
-                    onClick={() => setCostSection("budget")}
-                  >
-                    Budget Planning
-                  </Button>
+                  <p className="text-sm font-semibold">{activeCostSection === "boq" ? "Project BOQ" : "Budget Planning"}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {activeCostSection === "boq" ? "Project BOQ items and pricing details." : "Budget allocation by project or department."}
+                  </p>
                 </div>
               </div>
 
-              {costSection === "boq" ? (
+              {activeCostSection === "boq" ? (
                 <div className="space-y-3 p-4">
                   <div className="flex items-center justify-between gap-3">
-                    <p className="text-xs text-muted-foreground">Imported BOQ items with live tracking fields.</p>
+                    <p className="text-xs text-muted-foreground">
+                      {costSelectedProject ? "Imported BOQ items with live tracking fields." : "Select any project to view BOQ. Budgeting works without project selection."}
+                    </p>
                     <div className="flex items-center gap-2">
+                      <label className="text-xs text-muted-foreground">Project</label>
+                      <select
+                        className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+                        value={costProjectId}
+                        onChange={(e) => setCostProjectId(e.target.value)}
+                      >
+                        <option value="">Select project</option>
+                        {projects.map((project) => (
+                          <option key={project.id} value={project.id}>
+                            {project.projectId} - {project.projectName}
+                          </option>
+                        ))}
+                      </select>
                       <label className="text-xs text-muted-foreground">Category</label>
                       <select
                         className="h-8 rounded-md border border-input bg-background px-2 text-xs"
@@ -7797,7 +8047,7 @@ function ProjectModule() {
                       <thead className="bg-muted/50 text-muted-foreground">
                         <tr>
                           <th className="px-2 py-2 text-left font-medium">No.</th>
-                          <th className="px-2 py-2 text-left font-medium">Item Part Number</th>
+                          <th className="px-2 py-2 text-left font-medium">Item Code</th>
                           <th className="px-2 py-2 text-left font-medium">Item Description</th>
                           <th className="px-2 py-2 text-left font-medium">Category</th>
                           <th className="px-2 py-2 text-right font-medium">Quantity</th>
@@ -7810,7 +8060,13 @@ function ProjectModule() {
                         </tr>
                       </thead>
                       <tbody>
-                        {filteredProjectBoqRows.length === 0 ? (
+                        {!costSelectedProject ? (
+                          <tr>
+                            <td colSpan={11} className="px-2 py-6 text-center text-muted-foreground">
+                              No project selected. Choose a project from Project Context to view BOQ.
+                            </td>
+                          </tr>
+                        ) : filteredProjectBoqRows.length === 0 ? (
                           <tr>
                             <td colSpan={11} className="px-2 py-6 text-center text-muted-foreground">
                               No BOQ rows found for the selected category.
@@ -7818,7 +8074,7 @@ function ProjectModule() {
                           </tr>
                         ) : (
                           filteredProjectBoqRows.map((row) => (
-                            <tr key={`${selectedProject.id}-${row.id}-${row.partNumber}`} className="border-t">
+                            <tr key={`${costSelectedProject.id}-${row.id}-${row.partNumber}`} className="border-t">
                               <td className="px-2 py-2">{row.id}</td>
                               <td className="px-2 py-2">{row.partNumber || "—"}</td>
                               <td className="px-2 py-2">{row.description || "—"}</td>
@@ -7840,8 +8096,202 @@ function ProjectModule() {
                   </div>
                 </div>
               ) : (
-                <div className="p-4 text-xs text-muted-foreground">
-                  Budget planning workspace is ready for next step. This section can be connected to detailed budget phases and approvals.
+                <div className="space-y-3 p-4 text-xs">
+                  <div className="grid gap-3 md:grid-cols-4">
+                    <div className="rounded-md border p-3">
+                      <p className="text-[11px] text-muted-foreground">Approved Budget</p>
+                      <p className="text-sm font-semibold">{budgetAllocatedTotal.toLocaleString(undefined, { maximumFractionDigits: 2 })}</p>
+                    </div>
+                    <div className="rounded-md border p-3">
+                      <p className="text-[11px] text-muted-foreground">Actual Expenditure (BOQ)</p>
+                      <p className="text-sm font-semibold">{budgetConsumedTotal.toLocaleString(undefined, { maximumFractionDigits: 2 })}</p>
+                    </div>
+                    <div className="rounded-md border p-3">
+                      <p className="text-[11px] text-muted-foreground">Remaining</p>
+                      <p className="text-sm font-semibold">{Math.max(0, budgetAllocatedTotal - budgetConsumedTotal).toLocaleString(undefined, { maximumFractionDigits: 2 })}</p>
+                    </div>
+                    <div className="rounded-md border p-3">
+                      <p className="text-[11px] text-muted-foreground">Utilization</p>
+                      <p className="text-sm font-semibold">
+                        {budgetAllocatedTotal > 0 ? `${Math.min(100, (budgetConsumedTotal / budgetAllocatedTotal) * 100).toFixed(1)}%` : "0%"}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="grid gap-2 rounded-md border p-3 md:grid-cols-5">
+                    <select
+                      className="h-8 rounded-md border border-input bg-background px-2"
+                      value={budgetDraft.level}
+                      onChange={(e) =>
+                        setBudgetDraft((prev) => ({
+                          ...prev,
+                          level: e.target.value as "Project" | "Department",
+                          targetProjectId: "",
+                          targetDepartmentKey: "",
+                        }))
+                      }
+                    >
+                      <option value="Project">Project Level</option>
+                      <option value="Department">Department Level</option>
+                    </select>
+                    {budgetDraft.level === "Project" ? (
+                      <select
+                        className="h-8 rounded-md border border-input bg-background px-2"
+                        value={budgetDraft.targetProjectId}
+                        onChange={(e) => setBudgetDraft((prev) => ({ ...prev, targetProjectId: e.target.value }))}
+                      >
+                        <option value="">Select project</option>
+                        {projects.map((project) => (
+                          <option key={project.id} value={project.id}>
+                            {project.projectId} - {project.projectName}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <select
+                        className="h-8 rounded-md border border-input bg-background px-2"
+                        value={budgetDraft.targetDepartmentKey}
+                        onChange={(e) => setBudgetDraft((prev) => ({ ...prev, targetDepartmentKey: e.target.value }))}
+                      >
+                        <option value="">Select department</option>
+                        {MODULE_FILTER_DEPARTMENT_OPTIONS.map((opt) => (
+                          <option key={opt.value} value={opt.value}>
+                            {opt.label}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                    <select
+                      className="h-8 rounded-md border border-input bg-background px-2"
+                      value={budgetDraft.category}
+                      onChange={(e) => setBudgetDraft((prev) => ({ ...prev, category: e.target.value as "Material" | "Service" | "Training" }))}
+                    >
+                      <option value="Material">Material</option>
+                      <option value="Service">Service</option>
+                      <option value="Training">Training</option>
+                    </select>
+                    <Input
+                      className="h-8"
+                      type="number"
+                      placeholder="Allocated amount"
+                      value={budgetDraft.allocated}
+                      onChange={(e) => setBudgetDraft((prev) => ({ ...prev, allocated: e.target.value }))}
+                    />
+                    <Button
+                      type="button"
+                      size="sm"
+                      className="h-8"
+                      onClick={() => {
+                        const allocated = Number(budgetDraft.allocated);
+                        if (!Number.isFinite(allocated) || allocated <= 0) return;
+                        const target =
+                          budgetDraft.level === "Project"
+                            ? projects.find((p) => p.id === budgetDraft.targetProjectId)
+                            : MODULE_FILTER_DEPARTMENT_OPTIONS.find((d) => d.value === budgetDraft.targetDepartmentKey);
+                        if (!target) return;
+                        setBudgetLines((prev) => [
+                          {
+                            id: typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `pbud-${Date.now()}`,
+                            scopeType: budgetDraft.level,
+                            targetId: budgetDraft.level === "Project" ? String((target as ProjectRecord).id) : String((target as { value: string }).value),
+                            targetName: budgetDraft.level === "Project"
+                              ? `${(target as ProjectRecord).projectId} - ${(target as ProjectRecord).projectName}`
+                              : String((target as { label: string }).label),
+                            category: budgetDraft.category,
+                            allocated,
+                            consumed: 0,
+                            approval: "Pending Approval",
+                          },
+                          ...prev,
+                        ]);
+                        setBudgetDraft((prev) => ({ ...prev, allocated: "", targetProjectId: "", targetDepartmentKey: "" }));
+                      }}
+                    >
+                      Add Budget
+                    </Button>
+                  </div>
+
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <div className="overflow-x-auto rounded-md border">
+                      <div className="border-b bg-muted/30 px-3 py-2 text-xs font-medium">Project Budgets</div>
+                      <table className="min-w-full text-xs">
+                        <thead className="bg-muted/50 text-muted-foreground">
+                          <tr>
+                            <th className="px-2 py-2 text-left font-medium">Project</th>
+                            <th className="px-2 py-2 text-left font-medium">Category</th>
+                            <th className="px-2 py-2 text-right font-medium">Allocated</th>
+                            <th className="px-2 py-2 text-left font-medium">Approval</th>
+                            <th className="px-2 py-2 text-right font-medium">Action</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {projectBudgetLines.length === 0 ? (
+                            <tr>
+                              <td colSpan={5} className="px-2 py-4 text-center text-muted-foreground">No project budgets yet.</td>
+                            </tr>
+                          ) : (
+                            projectBudgetLines.map((line) => (
+                              <tr key={line.id} className="border-t">
+                                <td className="px-2 py-2">{line.targetName}</td>
+                                <td className="px-2 py-2">{line.category}</td>
+                                <td className="px-2 py-2 text-right">{line.allocated.toLocaleString()}</td>
+                                <td className="px-2 py-2"><StatusBadge value={line.approval} /></td>
+                                <td className="px-2 py-2 text-right">
+                                  {line.approval === "Pending Approval" ? (
+                                    <Button type="button" size="sm" className="h-7" onClick={() => setBudgetLines((prev) => prev.map((row) => (row.id === line.id ? { ...row, approval: "Approved" } : row)))}>
+                                      Approve
+                                    </Button>
+                                  ) : (
+                                    <span className="text-muted-foreground">—</span>
+                                  )}
+                                </td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    <div className="overflow-x-auto rounded-md border">
+                      <div className="border-b bg-muted/30 px-3 py-2 text-xs font-medium">Department Budgets</div>
+                      <table className="min-w-full text-xs">
+                        <thead className="bg-muted/50 text-muted-foreground">
+                          <tr>
+                            <th className="px-2 py-2 text-left font-medium">Department</th>
+                            <th className="px-2 py-2 text-left font-medium">Category</th>
+                            <th className="px-2 py-2 text-right font-medium">Allocated</th>
+                            <th className="px-2 py-2 text-left font-medium">Approval</th>
+                            <th className="px-2 py-2 text-right font-medium">Action</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {departmentBudgetLines.length === 0 ? (
+                            <tr>
+                              <td colSpan={5} className="px-2 py-4 text-center text-muted-foreground">No department budgets yet.</td>
+                            </tr>
+                          ) : (
+                            departmentBudgetLines.map((line) => (
+                              <tr key={line.id} className="border-t">
+                                <td className="px-2 py-2">{line.targetName}</td>
+                                <td className="px-2 py-2">{line.category}</td>
+                                <td className="px-2 py-2 text-right">{line.allocated.toLocaleString()}</td>
+                                <td className="px-2 py-2"><StatusBadge value={line.approval} /></td>
+                                <td className="px-2 py-2 text-right">
+                                  {line.approval === "Pending Approval" ? (
+                                    <Button type="button" size="sm" className="h-7" onClick={() => setBudgetLines((prev) => prev.map((row) => (row.id === line.id ? { ...row, approval: "Approved" } : row)))}>
+                                      Approve
+                                    </Button>
+                                  ) : (
+                                    <span className="text-muted-foreground">—</span>
+                                  )}
+                                </td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
                 </div>
               )}
             </div>
@@ -7881,7 +8331,7 @@ function ProjectModule() {
                   <input
                     ref={boqUploadInputRef}
                     type="file"
-                    accept=".xlsx,.xls"
+                    accept=".xlsx,.xls,.csv"
                     className="hidden"
                     onChange={onBoqUploadFile}
                   />
@@ -7895,9 +8345,59 @@ function ProjectModule() {
               </div>
             ) : null}
             <form className="space-y-4 p-5" onSubmit={onSubmit}>
+              {readOnly ? (
+                <section className="space-y-2">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Project BOQ Details</p>
+                  <div className="overflow-x-auto rounded-md border">
+                    <table className="min-w-full text-xs">
+                      <thead className="bg-muted/50 text-muted-foreground">
+                        <tr>
+                          <th className="px-2 py-2 text-left font-medium">No.</th>
+                          <th className="px-2 py-2 text-left font-medium">Item Code</th>
+                          <th className="px-2 py-2 text-left font-medium">Item Description</th>
+                          <th className="px-2 py-2 text-right font-medium">Quantity</th>
+                          <th className="px-2 py-2 text-right font-medium">Unit Price</th>
+                          <th className="px-2 py-2 text-right font-medium">Total Price</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {viewModalBoqRows.length === 0 ? (
+                          <tr>
+                            <td colSpan={6} className="px-2 py-4 text-center text-muted-foreground">
+                              No BOQ uploaded for this project yet.
+                            </td>
+                          </tr>
+                        ) : (
+                          viewModalBoqRows.map((row) => (
+                            <tr key={`${activeProjectId}-${row.no}-${row.itemCode}`} className="border-t">
+                              <td className="px-2 py-2">{row.no}</td>
+                              <td className="px-2 py-2">{row.itemCode}</td>
+                              <td className="px-2 py-2">{row.itemDescription}</td>
+                              <td className="px-2 py-2 text-right">{row.quantity.toLocaleString()}</td>
+                              <td className="px-2 py-2 text-right">{row.unitPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
+                              <td className="px-2 py-2 text-right">{row.totalPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+              ) : null}
+
               <section className="space-y-2">
                 <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">General Information</p>
                 <div className="grid gap-3 md:grid-cols-2">
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium">Project ID</label>
+                    <Input
+                      value={form.projectId}
+                      onChange={(e) => setForm((prev) => ({ ...prev, projectId: e.target.value }))}
+                      className="h-9 text-xs"
+                      placeholder="e.g. PRJ-0001"
+                      disabled={readOnly}
+                    />
+                  </div>
                   <div className="space-y-1">
                     <label className="text-xs font-medium">Project Name</label>
                     <Input
@@ -7952,6 +8452,58 @@ function ProjectModule() {
                       <option>Public Services</option>
                     </select>
                   </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium">Status</label>
+                    <select
+                      value={form.projectStatus}
+                      onChange={(e) => setForm((prev) => ({ ...prev, projectStatus: e.target.value as ProjectFormValues["projectStatus"] }))}
+                      className="h-9 w-full rounded-md border border-input bg-background px-3 text-xs"
+                      disabled={readOnly}
+                    >
+                      <option value="Draft">Draft</option>
+                      <option value="Active">Active</option>
+                      <option value="Completed">Completed</option>
+                      <option value="Cancelled">Cancelled</option>
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium">Project Type</label>
+                    <select
+                      value={form.projectType}
+                      onChange={(e) =>
+                        setForm((prev) => ({
+                          ...prev,
+                          projectType: e.target.value as ProjectFormValues["projectType"],
+                        }))
+                      }
+                      className="h-9 w-full rounded-md border border-input bg-background px-3 text-xs"
+                      disabled={readOnly}
+                    >
+                      <option value="">Select project type</option>
+                      <option value="Product">Product</option>
+                      <option value="Service">Service</option>
+                      <option value="Training">Training</option>
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium">Department Type</label>
+                    <select
+                      value={form.departmentType}
+                      onChange={(e) =>
+                        setForm((prev) => ({
+                          ...prev,
+                          departmentType: e.target.value as ProjectFormValues["departmentType"],
+                        }))
+                      }
+                      className="h-9 w-full rounded-md border border-input bg-background px-3 text-xs"
+                      disabled={readOnly}
+                    >
+                      <option value="">Select department type</option>
+                      <option value="Product">Product</option>
+                      <option value="Service">Service</option>
+                      <option value="Training">Training</option>
+                    </select>
+                  </div>
                 </div>
               </section>
 
@@ -7974,19 +8526,14 @@ function ProjectModule() {
                     </select>
                   </div>
                   <div className="space-y-1">
-                    <label className="text-xs font-medium">Member Name</label>
-                    <select
-                      value={form.memberName}
-                      onChange={(e) => setForm((prev) => ({ ...prev, memberName: e.target.value }))}
-                      className="h-9 w-full rounded-md border border-input bg-background px-3 text-xs"
+                    <label className="text-xs font-medium">Project Manager</label>
+                    <Input
+                      value={form.projectManager}
+                      onChange={(e) => setForm((prev) => ({ ...prev, projectManager: e.target.value }))}
+                      className="h-9 text-xs"
+                      placeholder="Enter project manager name"
                       disabled={readOnly}
-                    >
-                      <option value="">Select team member</option>
-                      <option>Alex Johnson</option>
-                      <option>Daniel Garcia</option>
-                      <option>Michael Lee</option>
-                      <option>Anna Brown</option>
-                    </select>
+                    />
                   </div>
                 </div>
               </section>
@@ -8160,12 +8707,15 @@ type BudgetEntity = {
   name: string;
   type: BudgetEntityType;
   linkedEntity: string;
+  projectType: "" | "Product" | "Service" | "Training";
+  departmentType: "" | "Product" | "Service" | "Training";
   total: number;
   used: number;
   status: "Active" | "Closed";
 };
 
 type BudgetTab = "Overview" | "Budgets";
+type BudgetBoqRow = Record<string, string | number>;
 
 function formatBudgetCurrency(amount: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(amount);
@@ -8206,6 +8756,25 @@ const BUDGET_DEPT_OPTIONS = [
   { value: "finance", label: "Finance" },
 ];
 
+const BUDGET_BOQ_HEADERS = [
+  "No.",
+  "Item Part Number",
+  "Item Description",
+  "UOM",
+  "Quantity",
+  "GPT Unit Cost",
+  "GPT Total Cost",
+  "Discount (%)",
+  "Discounted Unit Cost",
+  "Discounted Total Cost",
+  "Freight Insurance (%)",
+  "Bank Charges (%)",
+  "Import Tax (%)",
+  "Margin (%)",
+  "Unit Price",
+  "Total Price",
+] as const;
+
 function linkedValueFromBudgetEntity(entity: BudgetEntity | null): string {
   if (!entity) return "";
   const p = BUDGET_PROJECT_OPTIONS.find((o) => o.label === entity.linkedEntity);
@@ -8218,15 +8787,25 @@ function BudgetAllocationModalBody({
   readOnly,
   onClose,
   onSave,
+  boqRows,
+  boqNotice,
+  onDownloadBoqTemplate,
+  onUploadBoq,
 }: {
   initial: BudgetEntity | null;
   readOnly?: boolean;
   onClose: () => void;
   onSave: (row: BudgetEntity) => void;
+  boqRows: BudgetBoqRow[];
+  boqNotice: string | null;
+  onDownloadBoqTemplate: () => void;
+  onUploadBoq: () => void;
 }) {
   const [budgetType, setBudgetType] = useState<BudgetEntityType>(() => initial?.type ?? "Department");
   const [name, setName] = useState(() => initial?.name ?? "");
   const [linkedVal, setLinkedVal] = useState(() => linkedValueFromBudgetEntity(initial));
+  const [projectType, setProjectType] = useState<BudgetEntity["projectType"]>(() => initial?.projectType ?? "");
+  const [departmentType, setDepartmentType] = useState<BudgetEntity["departmentType"]>(() => initial?.departmentType ?? "");
   const [totalStr, setTotalStr] = useState(() => (initial ? String(initial.total) : ""));
   const [usedStr, setUsedStr] = useState(() => (initial ? String(initial.used) : "0"));
   const [status, setStatus] = useState<"Active" | "Closed">(() => initial?.status ?? "Active");
@@ -8241,6 +8820,8 @@ function BudgetAllocationModalBody({
     const total = Number(String(totalStr).replace(/[^0-9.-]/g, "")) || 0;
     const used = Number(String(usedStr).replace(/[^0-9.-]/g, "")) || 0;
     if (!name.trim() || !linkedVal || total <= 0) return;
+    if (budgetType === "Project" && !projectType) return;
+    if (budgetType === "Department" && !departmentType) return;
     const linkLabel =
       budgetType === "Project"
         ? BUDGET_PROJECT_OPTIONS.find((o) => o.value === linkedVal)?.label ?? linkedVal
@@ -8252,6 +8833,8 @@ function BudgetAllocationModalBody({
       name: name.trim(),
       type: budgetType,
       linkedEntity: linkLabel,
+      projectType,
+      departmentType,
       total,
       used: Math.min(Math.max(0, used), total),
       status,
@@ -8265,9 +8848,21 @@ function BudgetAllocationModalBody({
       <div className="no-scrollbar max-h-[min(90vh,560px)] w-full max-w-md overflow-y-auto rounded-lg border bg-card p-5 shadow-lg">
         <div className="mb-4 flex items-center justify-between gap-2">
           <h3 className="text-sm font-semibold">{readOnly ? "Budget details" : initial ? "Edit budget" : "Create budget"}</h3>
-          <Button variant="ghost" size="icon-sm" onClick={onClose} aria-label="Close">
-            <X className="h-4 w-4" />
-          </Button>
+          <div className="flex items-center gap-2">
+            {readOnly ? (
+              <>
+                <Button type="button" size="sm" variant="outline" onClick={onUploadBoq}>
+                  Import BOQ
+                </Button>
+                <Button type="button" size="sm" onClick={onDownloadBoqTemplate}>
+                  BOQ Template
+                </Button>
+              </>
+            ) : null}
+            <Button variant="ghost" size="icon-sm" onClick={onClose} aria-label="Close">
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
         <div className="space-y-5 text-xs">
           <div className="flex flex-col gap-3">
@@ -8320,6 +8915,37 @@ function BudgetAllocationModalBody({
               </select>
             </div>
           )}
+          {budgetType === "Project" ? (
+            <div className="flex flex-col gap-3">
+              <label className="text-xs font-medium">Project Type</label>
+              <select
+                className={selectClassB}
+                value={projectType}
+                onChange={(e) => setProjectType(e.target.value as BudgetEntity["projectType"])}
+                disabled={readOnly}
+              >
+                <option value="">Select project type</option>
+                <option value="Product">Product</option>
+                <option value="Service">Service</option>
+                <option value="Training">Training</option>
+              </select>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-3">
+              <label className="text-xs font-medium">Department Type</label>
+              <select
+                className={selectClassB}
+                value={departmentType}
+                onChange={(e) => setDepartmentType(e.target.value as BudgetEntity["departmentType"])}
+                disabled={readOnly}
+              >
+                <option value="">Select department type</option>
+                <option value="Product">Product</option>
+                <option value="Service">Service</option>
+                <option value="Training">Training</option>
+              </select>
+            </div>
+          )}
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="flex flex-col gap-3">
               <label className="text-xs font-medium">Total budget (USD)</label>
@@ -8347,6 +8973,42 @@ function BudgetAllocationModalBody({
               </span>
             </p>
           )}
+          {readOnly ? (
+            <section className="space-y-2 border-t pt-3">
+              <p className="text-xs font-semibold text-foreground">Imported BOQ Items</p>
+              {boqNotice ? (
+                <p className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700">{boqNotice}</p>
+              ) : null}
+              {boqRows.length === 0 ? (
+                <p className="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">No BOQ imported yet for this budget.</p>
+              ) : (
+                <div className="overflow-x-auto rounded-md border">
+                  <table className="w-full min-w-[1320px] text-xs">
+                    <thead className="bg-muted/50 text-muted-foreground">
+                      <tr>
+                        {BUDGET_BOQ_HEADERS.map((header) => (
+                          <th key={header} className="px-3 py-2 text-left font-medium">
+                            {header}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {boqRows.map((row, idx) => (
+                        <tr key={`budget-boq-${idx}`} className="border-t border-border/60">
+                          {BUDGET_BOQ_HEADERS.map((header) => (
+                            <td key={`${idx}-${header}`} className="px-3 py-2">
+                              {String(row[header] ?? "")}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </section>
+          ) : null}
         </div>
         <div className="mt-4 flex justify-end gap-2 pt-4">
           <Button className="h-8 min-w-24" variant="outline" onClick={onClose}>
@@ -8369,17 +9031,35 @@ function BudgetAllocationModal({
   initial,
   readOnly,
   onSave,
+  boqRows,
+  boqNotice,
+  onDownloadBoqTemplate,
+  onUploadBoq,
 }: {
   open: boolean;
   onClose: () => void;
   initial: BudgetEntity | null;
   readOnly?: boolean;
   onSave: (row: BudgetEntity) => void;
+  boqRows: BudgetBoqRow[];
+  boqNotice: string | null;
+  onDownloadBoqTemplate: () => void;
+  onUploadBoq: () => void;
 }) {
   if (!open) return null;
   const formKey = `${readOnly ? "ro" : "rw"}-${initial?.id ?? "new"}`;
   return (
-    <BudgetAllocationModalBody key={formKey} initial={initial} readOnly={readOnly} onClose={onClose} onSave={onSave} />
+    <BudgetAllocationModalBody
+      key={formKey}
+      initial={initial}
+      readOnly={readOnly}
+      onClose={onClose}
+      onSave={onSave}
+      boqRows={boqRows}
+      boqNotice={boqNotice}
+      onDownloadBoqTemplate={onDownloadBoqTemplate}
+      onUploadBoq={onUploadBoq}
+    />
   );
 }
 
@@ -8387,16 +9067,19 @@ function BudgetModule() {
   const [tab, setTab] = useState<BudgetTab>("Overview");
   const budgetTabs: BudgetTab[] = ["Overview", "Budgets"];
   const [rows, setRows] = useState<BudgetEntity[]>(() => [
-    { id: "b1", name: "Raw Materials", type: "Department", linkedEntity: "Operations", total: 1_800_000, used: 1_210_000, status: "Active" },
-    { id: "b2", name: "Logistics", type: "Department", linkedEntity: "Logistics", total: 600_000, used: 552_000, status: "Active" },
-    { id: "b3", name: "MRO", type: "Department", linkedEntity: "MRO", total: 320_000, used: 146_000, status: "Active" },
-    { id: "b4", name: "Capital Project Alpha", type: "Project", linkedEntity: "Construction Project A", total: 2_500_000, used: 720_000, status: "Active" },
-    { id: "b5", name: "IT Annual Spend", type: "Department", linkedEntity: "IT Department", total: 450_000, used: 90_000, status: "Closed" },
+    { id: "b1", name: "Raw Materials", type: "Department", linkedEntity: "Operations", projectType: "Product", departmentType: "Product", total: 1_800_000, used: 1_210_000, status: "Active" },
+    { id: "b2", name: "Logistics", type: "Department", linkedEntity: "Logistics", projectType: "Service", departmentType: "Service", total: 600_000, used: 552_000, status: "Active" },
+    { id: "b3", name: "MRO", type: "Department", linkedEntity: "MRO", projectType: "Product", departmentType: "Product", total: 320_000, used: 146_000, status: "Active" },
+    { id: "b4", name: "Capital Project Alpha", type: "Project", linkedEntity: "Construction Project A", projectType: "Training", departmentType: "Service", total: 2_500_000, used: 720_000, status: "Active" },
+    { id: "b5", name: "IT Annual Spend", type: "Department", linkedEntity: "IT Department", projectType: "Service", departmentType: "Training", total: 450_000, used: 90_000, status: "Closed" },
   ]);
   const [modalOpen, setModalOpen] = useState(false);
   const [modalInitial, setModalInitial] = useState<BudgetEntity | null>(null);
   const [modalReadOnly, setModalReadOnly] = useState(false);
   const [budgetTableSearch, setBudgetTableSearch] = useState("");
+  const [boqByBudget, setBoqByBudget] = useState<Record<string, BudgetBoqRow[]>>({});
+  const [boqNotice, setBoqNotice] = useState<string | null>(null);
+  const budgetBoqUploadInputRef = useRef<HTMLInputElement | null>(null);
 
   const activeRows = useMemo(() => rows.filter((r) => r.status === "Active"), [rows]);
 
@@ -8461,22 +9144,100 @@ function BudgetModule() {
   const openCreate = () => {
     setModalInitial(null);
     setModalReadOnly(false);
+    setBoqNotice(null);
     setModalOpen(true);
   };
 
   const openEdit = (row: BudgetEntity) => {
     setModalInitial(row);
     setModalReadOnly(false);
+    setBoqNotice(null);
     setModalOpen(true);
   };
 
   const openView = (row: BudgetEntity) => {
     setModalInitial(row);
     setModalReadOnly(true);
+    setBoqNotice(null);
     setModalOpen(true);
   };
 
   const closeModal = () => setModalOpen(false);
+
+  const activeBudgetBoqRows = useMemo(
+    () => (modalInitial?.id ? boqByBudget[modalInitial.id] ?? [] : []),
+    [boqByBudget, modalInitial?.id],
+  );
+
+  const onDownloadBoqTemplate = useCallback(() => {
+    const templateRows = [
+      {
+        "No.": 1,
+        "Item Part Number": "PN-001",
+        "Item Description": "Sample Item",
+        UOM: "PCS",
+        Quantity: 10,
+        "GPT Unit Cost": 100,
+        "GPT Total Cost": 1000,
+        "Discount (%)": 5,
+        "Discounted Unit Cost": 95,
+        "Discounted Total Cost": 950,
+        "Freight Insurance (%)": 2,
+        "Bank Charges (%)": 1,
+        "Import Tax (%)": 10,
+        "Margin (%)": 15,
+        "Unit Price": 120,
+        "Total Price": 1200,
+      },
+    ];
+    const worksheet = XLSX.utils.json_to_sheet(templateRows, { header: [...BUDGET_BOQ_HEADERS] });
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "BOQ Template");
+    XLSX.writeFile(workbook, "budget-boq-template.xlsx");
+  }, []);
+
+  const onUploadBoq = useCallback(() => {
+    budgetBoqUploadInputRef.current?.click();
+  }, []);
+
+  const onImportBoqFile = useCallback(
+    async (file: File) => {
+      if (!modalInitial?.id) return;
+      try {
+        const buffer = await file.arrayBuffer();
+        const workbook = XLSX.read(buffer, { type: "array" });
+        const firstSheet = workbook.SheetNames[0];
+        if (!firstSheet) {
+          setBoqNotice("Selected workbook has no sheets.");
+          return;
+        }
+        const sheet = workbook.Sheets[firstSheet];
+        const rows = XLSX.utils.sheet_to_json<BudgetBoqRow>(sheet, { defval: "" });
+        if (rows.length === 0) {
+          setBoqNotice("Selected sheet is empty.");
+          return;
+        }
+        const firstRow = rows[0] ?? {};
+        const missingHeaders = BUDGET_BOQ_HEADERS.filter((header) => !(header in firstRow));
+        if (missingHeaders.length > 0) {
+          setBoqNotice(`Invalid BOQ template. Missing columns: ${missingHeaders.join(", ")}`);
+          return;
+        }
+        const normalizedRows = rows.map((row) => {
+          const normalized: BudgetBoqRow = {};
+          for (const header of BUDGET_BOQ_HEADERS) {
+            normalized[header] = row[header] ?? "";
+          }
+          return normalized;
+        });
+        setBoqByBudget((prev) => ({ ...prev, [modalInitial.id]: normalizedRows }));
+        setBoqNotice(`BOQ imported successfully (${normalizedRows.length} row${normalizedRows.length === 1 ? "" : "s"}).`);
+      } catch {
+        setBoqNotice("Could not read the selected file. Please use a valid .xlsx/.xls BOQ file.");
+      }
+    },
+    [modalInitial?.id],
+  );
 
   const saveBudget = (row: BudgetEntity) => {
     setRows((prev) => {
@@ -8664,6 +9425,23 @@ function BudgetModule() {
         initial={modalInitial}
         readOnly={modalReadOnly}
         onSave={saveBudget}
+        boqRows={activeBudgetBoqRows}
+        boqNotice={boqNotice}
+        onDownloadBoqTemplate={onDownloadBoqTemplate}
+        onUploadBoq={onUploadBoq}
+      />
+      <input
+        ref={budgetBoqUploadInputRef}
+        type="file"
+        accept=".xlsx,.xls"
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) {
+            void onImportBoqFile(file);
+          }
+          e.target.value = "";
+        }}
       />
     </div>
   );
@@ -8675,6 +9453,7 @@ export default function Home() {
   const [createdPrs, setCreatedPrs] = useState<CreatedPrRecord[]>([]);
   const [createdRfqs, setCreatedRfqs] = useState<CreatedRfqRecord[]>([]);
   const [createdPos, setCreatedPos] = useState<CreatedPoRecord[]>([]);
+  const [grnRequests, setGrnRequests] = useState<GrnRequestRecord[]>([]);
   const [createdMasterDataRows, setCreatedMasterDataRows] = useState<ItemMasterRow[]>([]);
   const [workflowRules, setWorkflowRules] = useState(DEFAULT_WORKFLOW_RULES);
   const [workflowInstances, setWorkflowInstances] = useState(() => buildInitialDemoInstances(DEFAULT_WORKFLOW_RULES));
@@ -8706,6 +9485,38 @@ export default function Home() {
       if (idx >= 0) return prev.map((r, i) => (i === idx ? rule : r));
       return [...prev, rule];
     });
+  }, []);
+
+  const createGrnRequest = useCallback((payload: Omit<GrnRequestRecord, "id" | "requestedAt" | "status" | "confirmedAt">) => {
+    setGrnRequests((prev) => {
+      if (prev.some((r) => r.po === payload.po)) return prev;
+      return [
+        {
+          id: typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `grn-${Date.now()}-${Math.random()}`,
+          po: payload.po,
+          supplier: payload.supplier,
+          items: payload.items,
+          status: "Pending Confirmation",
+          requestedAt: new Date().toISOString().slice(0, 10),
+          confirmedAt: null,
+        },
+        ...prev,
+      ];
+    });
+  }, []);
+
+  const confirmGrnRequest = useCallback((requestId: string) => {
+    setGrnRequests((prev) =>
+      prev.map((row) =>
+        row.id === requestId
+          ? {
+              ...row,
+              status: "Confirmed",
+              confirmedAt: new Date().toISOString().slice(0, 10),
+            }
+          : row,
+      ),
+    );
   }, []);
 
   return (
@@ -8772,16 +9583,20 @@ export default function Home() {
               onOpenDrawer={setActiveDrawer}
               onSubmitForApproval={submitDocumentForApproval}
               onCreatePo={(record) => setCreatedPos((prev) => [record, ...prev])}
+              onCreateGrnRequest={createGrnRequest}
               createdPrs={createdPrs}
               createdRfqs={createdRfqs}
               setCreatedRfqs={setCreatedRfqs}
               createdPos={createdPos}
               createdMasterDataRows={createdMasterDataRows}
+              grnRequests={grnRequests}
             />
           )}
           {activeModule === "Project" && <ProjectModule />}
           {activeModule === "Sourcing" && <SourcingModule />}
-          {activeModule === "Inventory" && <InventoryModule />}
+          {activeModule === "Inventory" && (
+            <InventoryModule grnRequests={grnRequests} onConfirmGrnRequest={confirmGrnRequest} />
+          )}
           {activeModule === "Budget" && <BudgetModule />}
           {activeModule === "Settings" && (
             <ApprovalsWorkflowModule
