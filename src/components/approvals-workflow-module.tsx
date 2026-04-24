@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { CheckCircle2, Clock, Plus, X, XCircle } from "lucide-react";
 import { TableDeleteIconButton, TableEditIconButton } from "@/components/table-action-icon-buttons";
 import { Badge } from "@/components/ui/badge";
@@ -440,6 +440,7 @@ export function ApprovalsWorkflowModule({
   const [paymentModeDraft, setPaymentModeDraft] = useState("");
   const [paymentTypeDraft, setPaymentTypeDraft] = useState("");
   const [paymentTermDraft, setPaymentTermDraft] = useState({ advancePct: "", description: "" });
+  const settStorageKey = "scm.settings.sett.v1";
 
   const inbox = useMemo(() => inboxInstancesForRole(instances, actingRoleKey), [instances, actingRoleKey]);
 
@@ -577,6 +578,71 @@ export function ApprovalsWorkflowModule({
     setPaymentTerms((prev) => [{ id: `pay-term-${Date.now()}`, advancePct, description }, ...prev]);
     setPaymentTermDraft({ advancePct: "", description: "" });
   }, [paymentTermDraft]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const raw = window.localStorage.getItem(settStorageKey);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as Partial<{
+        settSection: SettSection;
+        businessUnits: { id: string; name: string }[];
+        sectors: { id: string; name: string }[];
+        clients: { id: string; clientName: string; address: string; poBox: string; telephone: string }[];
+        supplierCategories: { id: string; name: string; description: string }[];
+        shipmentDestinations: { id: string; name: string }[];
+        shipmentModes: { id: string; name: string }[];
+        shipmentTypes: { id: string; name: string }[];
+        paymentModes: { id: string; name: string }[];
+        paymentTypes: { id: string; name: string }[];
+        paymentTerms: { id: string; advancePct: string; description: string }[];
+      }>;
+      if (parsed.settSection) setSettSection(parsed.settSection);
+      if (Array.isArray(parsed.businessUnits)) setBusinessUnits(parsed.businessUnits);
+      if (Array.isArray(parsed.sectors)) setSectors(parsed.sectors);
+      if (Array.isArray(parsed.clients)) setClients(parsed.clients);
+      if (Array.isArray(parsed.supplierCategories)) setSupplierCategories(parsed.supplierCategories);
+      if (Array.isArray(parsed.shipmentDestinations)) setShipmentDestinations(parsed.shipmentDestinations);
+      if (Array.isArray(parsed.shipmentModes)) setShipmentModes(parsed.shipmentModes);
+      if (Array.isArray(parsed.shipmentTypes)) setShipmentTypes(parsed.shipmentTypes);
+      if (Array.isArray(parsed.paymentModes)) setPaymentModes(parsed.paymentModes);
+      if (Array.isArray(parsed.paymentTypes)) setPaymentTypes(parsed.paymentTypes);
+      if (Array.isArray(parsed.paymentTerms)) setPaymentTerms(parsed.paymentTerms);
+    } catch {
+      // Ignore invalid persisted SETT payload and continue with defaults.
+    }
+  }, [settStorageKey]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const snapshot = {
+      settSection,
+      businessUnits,
+      sectors,
+      clients,
+      supplierCategories,
+      shipmentDestinations,
+      shipmentModes,
+      shipmentTypes,
+      paymentModes,
+      paymentTypes,
+      paymentTerms,
+    };
+    window.localStorage.setItem(settStorageKey, JSON.stringify(snapshot));
+  }, [
+    businessUnits,
+    clients,
+    paymentModes,
+    paymentTerms,
+    paymentTypes,
+    sectors,
+    settSection,
+    shipmentDestinations,
+    shipmentModes,
+    shipmentTypes,
+    supplierCategories,
+    settStorageKey,
+  ]);
 
   const previewPick = useMemo(() => pickMatchingRule(rules, { docType: "PR", amount: 7500 } satisfies DocumentRuleInput), [rules]);
 

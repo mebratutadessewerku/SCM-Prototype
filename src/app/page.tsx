@@ -4,10 +4,13 @@ import { ApprovalsWorkflowModule, WorkflowRuleEditorForm } from "@/components/ap
 import { InventoryModule } from "@/components/inventory-module";
 import { ReportingModule } from "@/components/reporting-module";
 import {
+  approveCurrentStep,
   buildInitialDemoInstances,
   createWorkflowInstance,
   DEFAULT_WORKFLOW_RULES,
   newWorkflowId,
+  pendingStep,
+  rejectCurrentStep,
   type DocType,
   type SubmitApprovalDocumentInput,
   type WorkflowRule,
@@ -5975,9 +5978,17 @@ function ProcurementModule({
   );
 }
 
-function ProcurModule() {
+function ProcurModule({
+  onSubmitForApproval,
+  onApproveWorkflowDocument,
+  onRejectWorkflowDocument,
+}: {
+  onSubmitForApproval: (payload: SubmitApprovalDocumentInput) => string | null;
+  onApproveWorkflowDocument: (documentRef: string) => { message: string; isFullyApproved: boolean; ok: boolean };
+  onRejectWorkflowDocument: (documentRef: string) => { message: string; ok: boolean };
+}) {
   type ProcurSource = "Office" | "Project" | "Department";
-  type ProcurStatus = "Pending Approval" | "Under Review" | "Approved";
+  type ProcurStatus = "Pending Approval" | "Under Review" | "Approved" | "Rejected";
   type ProcurSubModule = "PR" | "RFQ" | "PO";
   type TeamMember = { id: string; name: string; role: string };
   type PiLine = {
@@ -6016,6 +6027,25 @@ function ProcurModule() {
     supplier: string;
     dueDate: string;
     status: "Draft" | "Sent";
+    sourcePrNumber?: string;
+    approvedPrSnapshot?: {
+      prNumber: string;
+      source: ProcurSource;
+      piNumber: string;
+      piAttachment: string;
+      supplier: string;
+      billTo: string;
+      currency: string;
+      businessUnit: string;
+      department: string;
+      milestone: string;
+      manufacturer: string;
+      description: string;
+      status: ProcurStatus;
+      createdAt: string;
+      piLines: PiLine[];
+      subtotal: number;
+    };
   };
   type ProcurPoRecord = {
     id: string;
@@ -6069,6 +6099,8 @@ function ProcurModule() {
   >([]);
   const [prOrders, setPrOrders] = useState<ProcurPrOrder[]>([]);
   const [rfqCreateOpen, setRfqCreateOpen] = useState(false);
+  const [rfqDetailMode, setRfqDetailMode] = useState<"view" | "edit" | null>(null);
+  const [selectedRfqId, setSelectedRfqId] = useState<string | null>(null);
   const [poCreateOpen, setPoCreateOpen] = useState(false);
   const [rfqForm, setRfqForm] = useState({
     projectId: "proj-a",
@@ -6152,6 +6184,35 @@ function ProcurModule() {
   );
   const projectRfqRows = useMemo(() => rfqRows.filter((row) => row.projectId === selectedProjectId), [rfqRows, selectedProjectId]);
   const projectPoRows = useMemo(() => poRows.filter((row) => row.projectId === selectedProjectId), [poRows, selectedProjectId]);
+  const selectedRfq = useMemo(
+    () => rfqRows.find((row) => row.id === selectedRfqId) ?? null,
+    [rfqRows, selectedRfqId],
+  );
+  const selectedRfqApprovedPr = useMemo(() => {
+    if (!selectedRfq) return null;
+    if (selectedRfq.approvedPrSnapshot) return selectedRfq.approvedPrSnapshot;
+    if (!selectedRfq.sourcePrNumber) return null;
+    const linkedPr = prOrders.find((row) => row.prNumber === selectedRfq.sourcePrNumber);
+    if (!linkedPr) return null;
+    return {
+      prNumber: linkedPr.prNumber,
+      source: linkedPr.source,
+      piNumber: linkedPr.piNumber,
+      piAttachment: linkedPr.piAttachment,
+      supplier: linkedPr.supplier,
+      billTo: linkedPr.billTo,
+      currency: linkedPr.currency,
+      businessUnit: linkedPr.businessUnit,
+      department: linkedPr.department,
+      milestone: linkedPr.milestone,
+      manufacturer: linkedPr.manufacturer,
+      description: linkedPr.description,
+      status: linkedPr.status,
+      createdAt: linkedPr.createdAt,
+      piLines: linkedPr.piLines,
+      subtotal: linkedPr.subtotal,
+    };
+  }, [prOrders, selectedRfq]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -6303,8 +6364,19 @@ function ProcurModule() {
     setSelectedProjectId(project.id);
     setSelectedPrId(newPr.id);
     setCreateOpen(false);
-    setNotice(`${newPr.prNumber} created and added to PR Order List for ${project.name}.`);
-  }, [form, projectOptionsWithPi, projectPiByProject, procurPrStorageKey]);
+    const approvalMsg = onSubmitForApproval({
+      documentRef: newPr.prNumber,
+      docType: "PR",
+      title: newPr.description || `${project.name} - PR`,
+      amount: subtotal,
+      originatorRoleKey: "requestor",
+    });
+    setNotice(
+      approvalMsg
+        ? `${newPr.prNumber} created. ${approvalMsg}`
+        : `${newPr.prNumber} created, added to PR Order List, and submitted to workflow rules.`,
+    );
+  }, [form, onSubmitForApproval, projectOptionsWithPi, projectPiByProject, procurPrStorageKey]);
 
   const handleCreateRfq = useCallback(() => {
     if (!rfqForm.dueDate) {
@@ -6322,8 +6394,19 @@ function ProcurModule() {
     setRfqRows((prev) => [newRfq, ...prev]);
     setSelectedProjectId(rfqForm.projectId);
     setRfqCreateOpen(false);
-    setNotice(`${newRfq.rfqNumber} created.`);
-  }, [rfqForm]);
+    const approvalMsg = onSubmitForApproval({
+      documentRef: newRfq.rfqNumber,
+      docType: "RFQ",
+      title: `${newRfq.rfqNumber} - ${newRfq.supplier}`,
+      amount: 0,
+      originatorRoleKey: "requestor",
+    });
+    setNotice(
+      approvalMsg
+        ? `${newRfq.rfqNumber} created. ${approvalMsg}`
+        : `${newRfq.rfqNumber} created and submitted to workflow rules.`,
+    );
+  }, [onSubmitForApproval, rfqForm]);
 
   const handleCreatePo = useCallback(() => {
     const totalAmount = Number(poForm.totalAmount);
@@ -6342,8 +6425,19 @@ function ProcurModule() {
     setPoRows((prev) => [newPo, ...prev]);
     setSelectedProjectId(poForm.projectId);
     setPoCreateOpen(false);
-    setNotice(`${newPo.poNumber} created.`);
-  }, [poForm]);
+    const approvalMsg = onSubmitForApproval({
+      documentRef: newPo.poNumber,
+      docType: "PO",
+      title: `${newPo.poNumber} - ${newPo.supplier}`,
+      amount: totalAmount,
+      originatorRoleKey: "buyer",
+    });
+    setNotice(
+      approvalMsg
+        ? `${newPo.poNumber} created. ${approvalMsg}`
+        : `${newPo.poNumber} created and submitted to workflow rules.`,
+    );
+  }, [onSubmitForApproval, poForm]);
 
   return (
     <div className="space-y-4">
@@ -6439,7 +6533,14 @@ function ProcurModule() {
                   </tr>
                 ) : (
                   projectPrOrders.map((row) => (
-                    <tr key={row.id} className="border-t">
+                    <tr
+                      key={row.id}
+                      className="cursor-pointer border-t hover:bg-muted/30"
+                      onClick={() => {
+                        setSelectedRfqId(row.id);
+                        setRfqDetailMode("view");
+                      }}
+                    >
                       <td className="px-2 py-2">{row.prNumber}</td>
                       <td className="px-2 py-2">{row.piNumber}</td>
                       <td className="px-2 py-2">{row.supplier}</td>
@@ -6657,6 +6758,87 @@ function ProcurModule() {
                   </div>
                 </div>
               </div>
+
+              <div className="flex justify-end gap-2">
+                <Button
+                  type="button"
+                  variant="destructive"
+                  size="sm"
+                  onClick={() => {
+                    const result = onRejectWorkflowDocument(selectedPr.prNumber);
+                    setPrOrders((prev) =>
+                      prev.map((row) =>
+                        row.id === selectedPr.id
+                          ? {
+                              ...row,
+                              status: "Rejected",
+                            }
+                          : row,
+                      ),
+                    );
+                    setNotice(result.message);
+                  }}
+                >
+                  Reject
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => {
+                    const result = onApproveWorkflowDocument(selectedPr.prNumber);
+                    const shouldMoveToRfq = (result.ok && result.isFullyApproved) || selectedPr.status === "Under Review";
+                    setPrOrders((prev) =>
+                      prev.map((row) =>
+                        row.id === selectedPr.id
+                          ? {
+                              ...row,
+                              status: shouldMoveToRfq ? "Approved" : "Under Review",
+                            }
+                          : row,
+                      ),
+                    );
+                    if (shouldMoveToRfq) {
+                      setRfqRows((prev) => {
+                        if (prev.some((row) => row.sourcePrNumber === selectedPr.prNumber)) return prev;
+                        const nextRfq: ProcurRfqRecord = {
+                          id: typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `procur-rfq-${Date.now()}`,
+                          rfqNumber: `RFQ-${Math.floor(Math.random() * 9000 + 1000)}`,
+                          projectId: selectedPr.projectId,
+                          supplier: selectedPr.supplier,
+                          dueDate: "",
+                          status: "Sent",
+                          sourcePrNumber: selectedPr.prNumber,
+                          approvedPrSnapshot: {
+                            prNumber: selectedPr.prNumber,
+                            source: selectedPr.source,
+                            piNumber: selectedPr.piNumber,
+                            piAttachment: selectedPr.piAttachment,
+                            supplier: selectedPr.supplier,
+                            billTo: selectedPr.billTo,
+                            currency: selectedPr.currency,
+                            businessUnit: selectedPr.businessUnit,
+                            department: selectedPr.department,
+                            milestone: selectedPr.milestone,
+                            manufacturer: selectedPr.manufacturer,
+                            description: selectedPr.description,
+                            status: selectedPr.status,
+                            createdAt: selectedPr.createdAt,
+                            piLines: selectedPrPiLines,
+                            subtotal: selectedPrSubtotal,
+                          },
+                        };
+                        return [nextRfq, ...prev];
+                      });
+                      setActiveSubModule("RFQ");
+                      setNotice(`${selectedPr.prNumber} approved and copied to RFQ list.`);
+                    } else {
+                      setNotice(result.message);
+                    }
+                  }}
+                >
+                  Approve
+                </Button>
+              </div>
             </div>
           </div>
         </div>
@@ -6699,11 +6881,12 @@ function ProcurModule() {
                     <th className="px-2 py-2 text-left font-medium">Supplier</th>
                     <th className="px-2 py-2 text-left font-medium">Due Date</th>
                     <th className="px-2 py-2 text-left font-medium">Status</th>
+                    <th className="px-2 py-2 text-right font-medium">Action</th>
                   </tr>
                 </thead>
                 <tbody>
                   {projectRfqRows.length === 0 ? (
-                    <tr><td colSpan={5} className="px-2 py-4 text-center text-muted-foreground">No RFQ created for this project.</td></tr>
+                    <tr><td colSpan={6} className="px-2 py-4 text-center text-muted-foreground">No RFQ created for this project.</td></tr>
                   ) : projectRfqRows.map((row) => (
                     <tr key={row.id} className="border-t">
                       <td className="px-2 py-2">{row.rfqNumber}</td>
@@ -6711,11 +6894,208 @@ function ProcurModule() {
                       <td className="px-2 py-2">{row.supplier}</td>
                       <td className="px-2 py-2">{row.dueDate}</td>
                       <td className="px-2 py-2"><StatusBadge value={row.status} /></td>
+                      <td className="px-2 py-2 text-right">
+                        <div className="flex justify-end gap-1">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="h-7"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setSelectedRfqId(row.id);
+                              setRfqDetailMode("view");
+                            }}
+                          >
+                            View
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="h-7"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setSelectedRfqId(row.id);
+                              setRfqDetailMode("edit");
+                            }}
+                          >
+                            Edit
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="destructive"
+                            size="sm"
+                            className="h-7"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setRfqRows((prev) => prev.filter((rfq) => rfq.id !== row.id));
+                              setNotice(`${row.rfqNumber} deleted.`);
+                            }}
+                          >
+                            Delete
+                          </Button>
+                        </div>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
+
+            {selectedRfq && rfqDetailMode ? (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+                <div className="w-full max-w-xl rounded-lg border bg-background shadow-lg">
+                  <div className="flex items-center justify-between border-b px-5 py-3">
+                    <div>
+                      <h2 className="text-sm font-semibold">{rfqDetailMode === "edit" ? "Edit RFQ" : "View RFQ"}</h2>
+                      <p className="text-xs text-muted-foreground">{selectedRfq.rfqNumber}</p>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => {
+                        setRfqDetailMode(null);
+                        setSelectedRfqId(null);
+                      }}
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </div>
+                  <div className="space-y-3 p-5 text-xs">
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <div className="space-y-1">
+                        <label className="font-medium">Project</label>
+                        <select
+                          className="h-9 w-full rounded-md border border-input bg-background px-2"
+                          value={selectedRfq.projectId}
+                          disabled={rfqDetailMode === "view"}
+                          onChange={(e) => {
+                            const projectId = e.target.value;
+                            setRfqRows((prev) =>
+                              prev.map((row) => (row.id === selectedRfq.id ? { ...row, projectId } : row)),
+                            );
+                          }}
+                        >
+                          {projectOptions.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
+                        </select>
+                      </div>
+                      <div className="space-y-1">
+                        <label className="font-medium">Supplier</label>
+                        <select
+                          className="h-9 w-full rounded-md border border-input bg-background px-2"
+                          value={selectedRfq.supplier}
+                          disabled={rfqDetailMode === "view"}
+                          onChange={(e) => {
+                            const supplier = e.target.value;
+                            setRfqRows((prev) =>
+                              prev.map((row) => (row.id === selectedRfq.id ? { ...row, supplier } : row)),
+                            );
+                          }}
+                        >
+                          {supplierOptions.map((supplier) => <option key={supplier} value={supplier}>{supplier}</option>)}
+                        </select>
+                      </div>
+                      <div className="space-y-1">
+                        <label className="font-medium">Due Date</label>
+                        <Input
+                          className="h-9"
+                          type="date"
+                          value={selectedRfq.dueDate}
+                          readOnly={rfqDetailMode === "view"}
+                          onChange={(e) => {
+                            const dueDate = e.target.value;
+                            setRfqRows((prev) =>
+                              prev.map((row) => (row.id === selectedRfq.id ? { ...row, dueDate } : row)),
+                            );
+                          }}
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="font-medium">Status</label>
+                        <div className="pt-2">
+                          <StatusBadge value={selectedRfq.status} />
+                        </div>
+                      </div>
+                    </div>
+                    {selectedRfqApprovedPr ? (
+                      <div className="space-y-3 rounded-md border p-3">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                          Approved PR Details
+                        </p>
+                        <div className="grid gap-2 md:grid-cols-3">
+                          <div><p className="text-muted-foreground">PR Number</p><p className="font-medium">{selectedRfqApprovedPr.prNumber}</p></div>
+                          <div><p className="text-muted-foreground">Source</p><p className="font-medium">{selectedRfqApprovedPr.source}</p></div>
+                          <div><p className="text-muted-foreground">PI Number</p><p className="font-medium">{selectedRfqApprovedPr.piNumber}</p></div>
+                          <div><p className="text-muted-foreground">Supplier</p><p className="font-medium">{selectedRfqApprovedPr.supplier}</p></div>
+                          <div><p className="text-muted-foreground">Bill To</p><p className="font-medium">{selectedRfqApprovedPr.billTo}</p></div>
+                          <div><p className="text-muted-foreground">Currency</p><p className="font-medium">{selectedRfqApprovedPr.currency}</p></div>
+                          <div><p className="text-muted-foreground">Business Unit</p><p className="font-medium">{selectedRfqApprovedPr.businessUnit}</p></div>
+                          <div><p className="text-muted-foreground">Department</p><p className="font-medium">{selectedRfqApprovedPr.department}</p></div>
+                          <div><p className="text-muted-foreground">Milestone</p><p className="font-medium">{selectedRfqApprovedPr.milestone}</p></div>
+                        </div>
+                        <div className="overflow-x-auto rounded-md border">
+                          <table className="min-w-full text-xs">
+                            <thead className="bg-muted/50 text-muted-foreground">
+                              <tr>
+                                <th className="px-2 py-2 text-left font-medium">Part Number</th>
+                                <th className="px-2 py-2 text-left font-medium">Item Description</th>
+                                <th className="px-2 py-2 text-right font-medium">Quantity</th>
+                                <th className="px-2 py-2 text-right font-medium">Unit Price</th>
+                                <th className="px-2 py-2 text-right font-medium">Total Price</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {selectedRfqApprovedPr.piLines.length === 0 ? (
+                                <tr><td colSpan={5} className="px-2 py-3 text-center text-muted-foreground">No PI lines found.</td></tr>
+                              ) : selectedRfqApprovedPr.piLines.map((line, idx) => (
+                                <tr key={`${selectedRfq.id}-${line.partNumber}-${idx}`} className="border-t">
+                                  <td className="px-2 py-2">{line.partNumber}</td>
+                                  <td className="px-2 py-2">{line.itemDescription}</td>
+                                  <td className="px-2 py-2 text-right">{line.quantity.toLocaleString()}</td>
+                                  <td className="px-2 py-2 text-right">{line.unitPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
+                                  <td className="px-2 py-2 text-right">{line.totalPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                        <div className="text-right font-medium">
+                          Subtotal: {selectedRfqApprovedPr.subtotal.toLocaleString(undefined, { maximumFractionDigits: 2 })} {selectedRfqApprovedPr.currency}
+                        </div>
+                      </div>
+                    ) : null}
+                    <div className="flex justify-end gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setRfqDetailMode(null);
+                          setSelectedRfqId(null);
+                        }}
+                      >
+                        {rfqDetailMode === "edit" ? "Close" : "Done"}
+                      </Button>
+                      {rfqDetailMode === "edit" ? (
+                        <Button
+                          type="button"
+                          size="sm"
+                          onClick={() => {
+                            setNotice(`${selectedRfq.rfqNumber} updated.`);
+                            setRfqDetailMode(null);
+                            setSelectedRfqId(null);
+                          }}
+                        >
+                          Save
+                        </Button>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : null}
           </CardContent>
         </Card>
       ) : null}
@@ -6985,6 +7365,9 @@ function SourcingModule() {
       categoryType: "Air & Sea Freight",
     },
   ]);
+  const sourcingRecordsStorageKey = "scm.sourcing.records.v1";
+  const sourcingSupplierCategoryStorageKey = "scm.sourcing.settings.supplierCategories.v1";
+  const sourcingManufacturerCategoryStorageKey = "scm.sourcing.settings.manufacturerCategories.v1";
 
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState<"All" | PartnerType>("All");
@@ -7018,6 +7401,50 @@ function SourcingModule() {
   const [sourcingCreateMfrCatOpen, setSourcingCreateMfrCatOpen] = useState(false);
   const [sourcingNewCatName, setSourcingNewCatName] = useState("");
   const [sourcingNewCatDesc, setSourcingNewCatDesc] = useState("");
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const rawRecords = window.localStorage.getItem(sourcingRecordsStorageKey);
+      if (rawRecords) {
+        const parsedRecords = JSON.parse(rawRecords) as unknown;
+        if (Array.isArray(parsedRecords)) {
+          setRecords(parsedRecords as PartnerRecord[]);
+        }
+      }
+      const rawSupplierSettings = window.localStorage.getItem(sourcingSupplierCategoryStorageKey);
+      if (rawSupplierSettings) {
+        const parsedSupplierSettings = JSON.parse(rawSupplierSettings) as unknown;
+        if (Array.isArray(parsedSupplierSettings)) {
+          setSourcingSettingsSupplierRows(parsedSupplierSettings as SourcingSettingsCategoryRow[]);
+        }
+      }
+      const rawManufacturerSettings = window.localStorage.getItem(sourcingManufacturerCategoryStorageKey);
+      if (rawManufacturerSettings) {
+        const parsedManufacturerSettings = JSON.parse(rawManufacturerSettings) as unknown;
+        if (Array.isArray(parsedManufacturerSettings)) {
+          setSourcingSettingsMfrRows(parsedManufacturerSettings as SourcingSettingsCategoryRow[]);
+        }
+      }
+    } catch {
+      // Ignore invalid sourcing persisted payload and continue with defaults.
+    }
+  }, [sourcingManufacturerCategoryStorageKey, sourcingRecordsStorageKey, sourcingSupplierCategoryStorageKey]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(sourcingRecordsStorageKey, JSON.stringify(records));
+  }, [records, sourcingRecordsStorageKey]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(sourcingSupplierCategoryStorageKey, JSON.stringify(sourcingSettingsSupplierRows));
+  }, [sourcingSettingsSupplierRows, sourcingSupplierCategoryStorageKey]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(sourcingManufacturerCategoryStorageKey, JSON.stringify(sourcingSettingsMfrRows));
+  }, [sourcingManufacturerCategoryStorageKey, sourcingSettingsMfrRows]);
 
   const filteredRecords = records.filter((record) => {
     const matchesType = typeFilter === "All" || record.partnerType === typeFilter;
@@ -8272,6 +8699,8 @@ function ProjectModule() {
   const [formError, setFormError] = useState<string | null>(null);
   const [projects, setProjects] = useState<ProjectRecord[]>([]);
   const projectRecordsStorageKey = "scm.project.records.v1";
+  const projectBoqStorageKey = "scm.project.boqByProject.v1";
+  const projectBudgetStorageKey = "scm.project.budgetLines.v1";
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [costProjectId, setCostProjectId] = useState<string>("");
   const [costSection, setCostSection] = useState<ProjectCostSection>("boq");
@@ -8502,6 +8931,38 @@ function ProjectModule() {
     if (typeof window === "undefined") return;
     window.localStorage.setItem(projectPiStorageKey, JSON.stringify(piByProject));
   }, [piByProject, projectPiStorageKey]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const rawBoq = window.localStorage.getItem(projectBoqStorageKey);
+      if (rawBoq) {
+        const parsedBoq = JSON.parse(rawBoq) as unknown;
+        if (parsedBoq && typeof parsedBoq === "object") {
+          setBoqByProject(parsedBoq as Record<string, ProjectBoqItem[]>);
+        }
+      }
+      const rawBudget = window.localStorage.getItem(projectBudgetStorageKey);
+      if (rawBudget) {
+        const parsedBudget = JSON.parse(rawBudget) as unknown;
+        if (Array.isArray(parsedBudget)) {
+          setBudgetLines(parsedBudget as ProjectBudgetLine[]);
+        }
+      }
+    } catch {
+      // Ignore invalid BOQ/Budget persisted payload and continue with defaults.
+    }
+  }, [projectBoqStorageKey, projectBudgetStorageKey]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(projectBoqStorageKey, JSON.stringify(boqByProject));
+  }, [boqByProject, projectBoqStorageKey]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(projectBudgetStorageKey, JSON.stringify(budgetLines));
+  }, [budgetLines, projectBudgetStorageKey]);
   const departmentBudgetLines = useMemo(
     () => budgetLines.filter((line) => line.scopeType === "Department"),
     [budgetLines],
@@ -10447,6 +10908,30 @@ export default function Home() {
   const [createdMasterDataRows, setCreatedMasterDataRows] = useState<ItemMasterRow[]>([]);
   const [workflowRules, setWorkflowRules] = useState(DEFAULT_WORKFLOW_RULES);
   const [workflowInstances, setWorkflowInstances] = useState(() => buildInitialDemoInstances(DEFAULT_WORKFLOW_RULES));
+  const workflowSettingsStorageKey = "scm.settings.workflow.v1";
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const raw = window.localStorage.getItem(workflowSettingsStorageKey);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as Partial<{ workflowRules: WorkflowRule[]; workflowInstances: any[] }>;
+      if (Array.isArray(parsed.workflowRules)) setWorkflowRules(parsed.workflowRules);
+      if (Array.isArray(parsed.workflowInstances)) {
+        setWorkflowInstances(parsed.workflowInstances as ReturnType<typeof buildInitialDemoInstances>);
+      }
+    } catch {
+      // Ignore invalid workflow settings payload and continue with defaults.
+    }
+  }, [workflowSettingsStorageKey]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(
+      workflowSettingsStorageKey,
+      JSON.stringify({ workflowRules, workflowInstances }),
+    );
+  }, [workflowInstances, workflowRules, workflowSettingsStorageKey]);
 
   const submitDocumentForApproval = useCallback((payload: SubmitApprovalDocumentInput): string | null => {
     const res = createWorkflowInstance(
@@ -10468,6 +10953,69 @@ export default function Home() {
     }
     return null;
   }, [workflowRules]);
+
+  const approveWorkflowDocument = useCallback((documentRef: string): { message: string; isFullyApproved: boolean; ok: boolean } => {
+    let message = "";
+    let isFullyApproved = false;
+    let ok = false;
+    setWorkflowInstances((prev) => {
+      const target = prev.find((row) => row.documentRef === documentRef);
+      if (!target) {
+        message = `${documentRef}: no workflow instance found.`;
+        return prev;
+      }
+      const step = pendingStep(target);
+      if (!step) {
+        message = `${documentRef}: no pending approval step.`;
+        return prev;
+      }
+      const result = approveCurrentStep(target, "Alex Johnson", step.roleKey, "Approved from Procur PR Detail");
+      if (!result.ok) {
+        message = `${documentRef}: ${result.reason}`;
+        return prev;
+      }
+      ok = true;
+      isFullyApproved = result.instance.documentStatus === "approved";
+      message = isFullyApproved
+        ? `${documentRef} approved by all approvers.`
+        : `${documentRef} approved at ${step.roleLabel}.`;
+      return prev.map((row) => (row.id === result.instance.id ? result.instance : row));
+    });
+    return {
+      message: message || `${documentRef}: approval processed.`,
+      isFullyApproved,
+      ok,
+    };
+  }, []);
+
+  const rejectWorkflowDocument = useCallback((documentRef: string): { message: string; ok: boolean } => {
+    let message = "";
+    let ok = false;
+    setWorkflowInstances((prev) => {
+      const target = prev.find((row) => row.documentRef === documentRef);
+      if (!target) {
+        message = `${documentRef}: no workflow instance found.`;
+        return prev;
+      }
+      const step = pendingStep(target);
+      if (!step) {
+        message = `${documentRef}: no pending approval step.`;
+        return prev;
+      }
+      const result = rejectCurrentStep(target, "Alex Johnson", step.roleKey, "Rejected from Procur PR Detail");
+      if (!result.ok) {
+        message = `${documentRef}: ${result.reason}`;
+        return prev;
+      }
+      ok = true;
+      message = `${documentRef} rejected at ${step.roleLabel}.`;
+      return prev.map((row) => (row.id === result.instance.id ? result.instance : row));
+    });
+    return {
+      message: message || `${documentRef}: rejection processed.`,
+      ok,
+    };
+  }, []);
 
   const saveWorkflowRuleFromDrawer = useCallback((rule: WorkflowRule) => {
     setWorkflowRules((prev) => {
@@ -10582,7 +11130,13 @@ export default function Home() {
               grnRequests={grnRequests}
             />
           )}
-          {activeModule === "Procur" && <ProcurModule />}
+          {activeModule === "Procur" && (
+            <ProcurModule
+              onSubmitForApproval={submitDocumentForApproval}
+              onApproveWorkflowDocument={approveWorkflowDocument}
+              onRejectWorkflowDocument={rejectWorkflowDocument}
+            />
+          )}
           {activeModule === "Project" && <ProjectModule />}
           {activeModule === "Sourcing" && <SourcingModule />}
           {activeModule === "Inventory" && (
