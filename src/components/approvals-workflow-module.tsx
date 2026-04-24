@@ -385,7 +385,8 @@ export function WorkflowRuleEditorForm({
   );
 }
 
-type ApprovalsTab = "inbox" | "rules" | "workflows";
+type ApprovalsTab = "inbox" | "rules" | "workflows" | "sett";
+type SettSection = "clients" | "shipment" | "payment" | "businessUnit" | "sectors" | "users" | "supplierCategory" | "approval" | "stock";
 
 export function ApprovalsWorkflowModule({
   rules,
@@ -406,6 +407,39 @@ export function ApprovalsWorkflowModule({
   const [actionError, setActionError] = useState<string | null>(null);
   const [ruleEditor, setRuleEditor] = useState<WorkflowRule | null | "create">(null);
   const [ruleDeleteTarget, setRuleDeleteTarget] = useState<WorkflowRule | null>(null);
+  const [settSection, setSettSection] = useState<SettSection>("clients");
+  const [businessUnits, setBusinessUnits] = useState<{ id: string; name: string }[]>([]);
+  const [businessUnitDraft, setBusinessUnitDraft] = useState("");
+  const [sectors, setSectors] = useState<{ id: string; name: string }[]>([]);
+  const [sectorDraft, setSectorDraft] = useState("");
+  const [clients, setClients] = useState<
+    { id: string; clientName: string; address: string; poBox: string; telephone: string }[]
+  >([]);
+  const [clientDraft, setClientDraft] = useState({
+    clientName: "",
+    address: "",
+    poBox: "",
+    telephone: "",
+  });
+  const [supplierCategories, setSupplierCategories] = useState<
+    { id: string; name: string; description: string }[]
+  >([]);
+  const [supplierCategoryDraft, setSupplierCategoryDraft] = useState({
+    name: "",
+    description: "",
+  });
+  const [shipmentDestinations, setShipmentDestinations] = useState<{ id: string; name: string }[]>([]);
+  const [shipmentModes, setShipmentModes] = useState<{ id: string; name: string }[]>([]);
+  const [shipmentTypes, setShipmentTypes] = useState<{ id: string; name: string }[]>([]);
+  const [shipmentDestinationDraft, setShipmentDestinationDraft] = useState("");
+  const [shipmentModeDraft, setShipmentModeDraft] = useState("");
+  const [shipmentTypeDraft, setShipmentTypeDraft] = useState("");
+  const [paymentModes, setPaymentModes] = useState<{ id: string; name: string }[]>([]);
+  const [paymentTypes, setPaymentTypes] = useState<{ id: string; name: string }[]>([]);
+  const [paymentTerms, setPaymentTerms] = useState<{ id: string; advancePct: string; description: string }[]>([]);
+  const [paymentModeDraft, setPaymentModeDraft] = useState("");
+  const [paymentTypeDraft, setPaymentTypeDraft] = useState("");
+  const [paymentTermDraft, setPaymentTermDraft] = useState({ advancePct: "", description: "" });
 
   const inbox = useMemo(() => inboxInstancesForRole(instances, actingRoleKey), [instances, actingRoleKey]);
 
@@ -467,6 +501,83 @@ export function ApprovalsWorkflowModule({
     });
   };
 
+  const addBusinessUnit = useCallback(() => {
+    const name = businessUnitDraft.trim();
+    if (!name) return;
+    setBusinessUnits((prev) => [{ id: `bu-${Date.now()}`, name }, ...prev]);
+    setBusinessUnitDraft("");
+  }, [businessUnitDraft]);
+
+  const addSector = useCallback(() => {
+    const name = sectorDraft.trim();
+    if (!name) return;
+    setSectors((prev) => [{ id: `sector-${Date.now()}`, name }, ...prev]);
+    setSectorDraft("");
+  }, [sectorDraft]);
+
+  const addClient = useCallback(() => {
+    const clientName = clientDraft.clientName.trim();
+    const address = clientDraft.address.trim();
+    const poBox = clientDraft.poBox.trim();
+    const telephone = clientDraft.telephone.trim();
+    if (!clientName || !address || !poBox || !telephone) return;
+    setClients((prev) => [{ id: `client-${Date.now()}`, clientName, address, poBox, telephone }, ...prev]);
+    setClientDraft({ clientName: "", address: "", poBox: "", telephone: "" });
+  }, [clientDraft]);
+
+  const addSupplierCategory = useCallback(() => {
+    const name = supplierCategoryDraft.name.trim();
+    const description = supplierCategoryDraft.description.trim();
+    if (!name || !description) return;
+    setSupplierCategories((prev) => [{ id: `supcat-${Date.now()}`, name, description }, ...prev]);
+    setSupplierCategoryDraft({ name: "", description: "" });
+  }, [supplierCategoryDraft]);
+
+  const addShipmentDestination = useCallback(() => {
+    const name = shipmentDestinationDraft.trim();
+    if (!name) return;
+    setShipmentDestinations((prev) => [{ id: `ship-dest-${Date.now()}`, name }, ...prev]);
+    setShipmentDestinationDraft("");
+  }, [shipmentDestinationDraft]);
+
+  const addShipmentMode = useCallback(() => {
+    const name = shipmentModeDraft.trim();
+    if (!name) return;
+    setShipmentModes((prev) => [{ id: `ship-mode-${Date.now()}`, name }, ...prev]);
+    setShipmentModeDraft("");
+  }, [shipmentModeDraft]);
+
+  const addShipmentType = useCallback(() => {
+    const name = shipmentTypeDraft.trim();
+    if (!name) return;
+    setShipmentTypes((prev) => [{ id: `ship-type-${Date.now()}`, name }, ...prev]);
+    setShipmentTypeDraft("");
+  }, [shipmentTypeDraft]);
+
+  const addPaymentMode = useCallback(() => {
+    const name = paymentModeDraft.trim();
+    if (!name) return;
+    setPaymentModes((prev) => [{ id: `pay-mode-${Date.now()}`, name }, ...prev]);
+    setPaymentModeDraft("");
+  }, [paymentModeDraft]);
+
+  const addPaymentType = useCallback(() => {
+    const name = paymentTypeDraft.trim();
+    if (!name) return;
+    setPaymentTypes((prev) => [{ id: `pay-type-${Date.now()}`, name }, ...prev]);
+    setPaymentTypeDraft("");
+  }, [paymentTypeDraft]);
+
+  const addPaymentTerm = useCallback(() => {
+    const advancePct = paymentTermDraft.advancePct.trim();
+    const description = paymentTermDraft.description.trim();
+    if (!advancePct || !description) return;
+    const parsedPct = Number(advancePct);
+    if (!Number.isFinite(parsedPct) || parsedPct < 0 || parsedPct > 100) return;
+    setPaymentTerms((prev) => [{ id: `pay-term-${Date.now()}`, advancePct, description }, ...prev]);
+    setPaymentTermDraft({ advancePct: "", description: "" });
+  }, [paymentTermDraft]);
+
   const previewPick = useMemo(() => pickMatchingRule(rules, { docType: "PR", amount: 7500 } satisfies DocumentRuleInput), [rules]);
 
   return (
@@ -476,6 +587,7 @@ export function ApprovalsWorkflowModule({
           {tabBtn("inbox", "Approval inbox")}
           {tabBtn("rules", "Workflow rules")}
           {tabBtn("workflows", "All workflows")}
+          {tabBtn("sett", "SETT")}
         </div>
         <div className="flex flex-wrap items-center gap-2 text-xs">
           <span className="text-muted-foreground">Acting as role</span>
@@ -686,6 +798,329 @@ export function ApprovalsWorkflowModule({
                 </tbody>
               </table>
             </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {tab === "sett" && (
+        <Card className="border-border shadow-none">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base">SETT</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3 text-xs text-muted-foreground">
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" size="sm" variant={settSection === "clients" ? "default" : "outline"} onClick={() => setSettSection("clients")}>Clients</Button>
+              <Button type="button" size="sm" variant={settSection === "shipment" ? "default" : "outline"} onClick={() => setSettSection("shipment")}>shipment</Button>
+              <Button type="button" size="sm" variant={settSection === "payment" ? "default" : "outline"} onClick={() => setSettSection("payment")}>payment</Button>
+              <Button type="button" size="sm" variant={settSection === "businessUnit" ? "default" : "outline"} onClick={() => setSettSection("businessUnit")}>Business Unit</Button>
+              <Button type="button" size="sm" variant={settSection === "sectors" ? "default" : "outline"} onClick={() => setSettSection("sectors")}>Sectors</Button>
+              <Button type="button" size="sm" variant={settSection === "users" ? "default" : "outline"} onClick={() => setSettSection("users")}>Users</Button>
+              <Button type="button" size="sm" variant={settSection === "supplierCategory" ? "default" : "outline"} onClick={() => setSettSection("supplierCategory")}>Supplier Category</Button>
+              <Button type="button" size="sm" variant={settSection === "approval" ? "default" : "outline"} onClick={() => setSettSection("approval")}>Approval</Button>
+              <Button type="button" size="sm" variant={settSection === "stock" ? "default" : "outline"} onClick={() => setSettSection("stock")}>Stock</Button>
+            </div>
+
+            {settSection === "businessUnit" ? (
+              <div className="space-y-3 rounded-md border p-3">
+                <p className="font-medium text-foreground">Business Unit</p>
+                <div className="flex flex-wrap gap-2">
+                  <Input
+                    className="h-8 w-full max-w-sm"
+                    placeholder="Add business unit"
+                    value={businessUnitDraft}
+                    onChange={(e) => setBusinessUnitDraft(e.target.value)}
+                  />
+                  <Button type="button" size="sm" onClick={addBusinessUnit}>Add</Button>
+                </div>
+                {businessUnits.length === 0 ? (
+                  <p>No business units added yet.</p>
+                ) : (
+                  <div className="space-y-1">
+                    {businessUnits.map((row) => (
+                      <div key={row.id} className="flex items-center justify-between rounded-md border px-2 py-1.5">
+                        <span>{row.name}</span>
+                        <Button type="button" size="sm" variant="ghost" className="h-7" onClick={() => setBusinessUnits((prev) => prev.filter((x) => x.id !== row.id))}>Remove</Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : null}
+
+            {settSection === "sectors" ? (
+              <div className="space-y-3 rounded-md border p-3">
+                <p className="font-medium text-foreground">Sectors</p>
+                <div className="flex flex-wrap gap-2">
+                  <Input className="h-8 w-full max-w-sm" placeholder="Add sector" value={sectorDraft} onChange={(e) => setSectorDraft(e.target.value)} />
+                  <Button type="button" size="sm" onClick={addSector}>Add</Button>
+                </div>
+                {sectors.length === 0 ? (
+                  <p>No sectors added yet.</p>
+                ) : (
+                  <div className="space-y-1">
+                    {sectors.map((row) => (
+                      <div key={row.id} className="flex items-center justify-between rounded-md border px-2 py-1.5">
+                        <span>{row.name}</span>
+                        <Button type="button" size="sm" variant="ghost" className="h-7" onClick={() => setSectors((prev) => prev.filter((x) => x.id !== row.id))}>Remove</Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : null}
+
+            {settSection === "clients" ? (
+              <div className="space-y-3 rounded-md border p-3">
+                <p className="font-medium text-foreground">Clients</p>
+                <div className="grid gap-2 md:grid-cols-2">
+                  <Input className="h-8" placeholder="Client Name" value={clientDraft.clientName} onChange={(e) => setClientDraft((prev) => ({ ...prev, clientName: e.target.value }))} />
+                  <Input className="h-8" placeholder="Address" value={clientDraft.address} onChange={(e) => setClientDraft((prev) => ({ ...prev, address: e.target.value }))} />
+                  <Input className="h-8" placeholder="P.O. Box" value={clientDraft.poBox} onChange={(e) => setClientDraft((prev) => ({ ...prev, poBox: e.target.value }))} />
+                  <Input className="h-8" placeholder="Telephone" value={clientDraft.telephone} onChange={(e) => setClientDraft((prev) => ({ ...prev, telephone: e.target.value }))} />
+                </div>
+                <Button type="button" size="sm" onClick={addClient}>Add Client</Button>
+                {clients.length === 0 ? (
+                  <p>No clients added yet.</p>
+                ) : (
+                  <div className="overflow-x-auto rounded-md border">
+                    <table className="w-full min-w-[620px] text-left">
+                      <thead className="bg-muted/50">
+                        <tr>
+                          <th className="px-2 py-1.5 font-medium">Client Name</th>
+                          <th className="px-2 py-1.5 font-medium">Address</th>
+                          <th className="px-2 py-1.5 font-medium">P.O. Box</th>
+                          <th className="px-2 py-1.5 font-medium">Telephone</th>
+                          <th className="px-2 py-1.5 font-medium">Action</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {clients.map((row) => (
+                          <tr key={row.id} className="border-t">
+                            <td className="px-2 py-1.5">{row.clientName}</td>
+                            <td className="px-2 py-1.5">{row.address}</td>
+                            <td className="px-2 py-1.5">{row.poBox}</td>
+                            <td className="px-2 py-1.5">{row.telephone}</td>
+                            <td className="px-2 py-1.5">
+                              <Button type="button" size="sm" variant="ghost" className="h-7" onClick={() => setClients((prev) => prev.filter((x) => x.id !== row.id))}>Remove</Button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            ) : null}
+
+            {settSection === "supplierCategory" ? (
+              <div className="space-y-3 rounded-md border p-3">
+                <p className="font-medium text-foreground">Supplier Category</p>
+                <div className="grid gap-2 md:grid-cols-[1fr,2fr,auto]">
+                  <Input className="h-8" placeholder="Category name" value={supplierCategoryDraft.name} onChange={(e) => setSupplierCategoryDraft((prev) => ({ ...prev, name: e.target.value }))} />
+                  <Input className="h-8" placeholder="Description" value={supplierCategoryDraft.description} onChange={(e) => setSupplierCategoryDraft((prev) => ({ ...prev, description: e.target.value }))} />
+                  <Button type="button" size="sm" onClick={addSupplierCategory}>Add</Button>
+                </div>
+                {supplierCategories.length === 0 ? (
+                  <p>No supplier categories added yet.</p>
+                ) : (
+                  <div className="space-y-1">
+                    {supplierCategories.map((row) => (
+                      <div key={row.id} className="flex items-center justify-between gap-2 rounded-md border px-2 py-1.5">
+                        <div>
+                          <p className="text-foreground">{row.name}</p>
+                          <p className="text-[11px] text-muted-foreground">{row.description}</p>
+                        </div>
+                        <Button type="button" size="sm" variant="ghost" className="h-7" onClick={() => setSupplierCategories((prev) => prev.filter((x) => x.id !== row.id))}>Remove</Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : null}
+
+            {settSection === "shipment" ? (
+              <div className="space-y-3 rounded-md border p-3">
+                <p className="font-medium text-foreground">Shipment Configuration</p>
+
+                <div className="grid gap-3 md:grid-cols-3">
+                  <div className="space-y-2 rounded-md border p-3">
+                    <p className="font-medium text-foreground">Shipment Destination</p>
+                    <div className="flex flex-wrap gap-2">
+                      <Input
+                        className="h-8 w-full"
+                        placeholder="Add shipment destination"
+                        value={shipmentDestinationDraft}
+                        onChange={(e) => setShipmentDestinationDraft(e.target.value)}
+                      />
+                      <Button type="button" size="sm" onClick={addShipmentDestination}>Add</Button>
+                    </div>
+                    {shipmentDestinations.length === 0 ? (
+                      <p>No shipment destinations added yet.</p>
+                    ) : (
+                      <div className="space-y-1">
+                        {shipmentDestinations.map((row) => (
+                          <div key={row.id} className="flex items-center justify-between rounded-md border px-2 py-1.5">
+                            <span>{row.name}</span>
+                            <Button type="button" size="sm" variant="ghost" className="h-7" onClick={() => setShipmentDestinations((prev) => prev.filter((x) => x.id !== row.id))}>Remove</Button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="space-y-2 rounded-md border p-3">
+                    <p className="font-medium text-foreground">Shipment Mode</p>
+                    <div className="flex flex-wrap gap-2">
+                      <Input
+                        className="h-8 w-full"
+                        placeholder="Add shipment mode"
+                        value={shipmentModeDraft}
+                        onChange={(e) => setShipmentModeDraft(e.target.value)}
+                      />
+                      <Button type="button" size="sm" onClick={addShipmentMode}>Add</Button>
+                    </div>
+                    {shipmentModes.length === 0 ? (
+                      <p>No shipment modes added yet.</p>
+                    ) : (
+                      <div className="space-y-1">
+                        {shipmentModes.map((row) => (
+                          <div key={row.id} className="flex items-center justify-between rounded-md border px-2 py-1.5">
+                            <span>{row.name}</span>
+                            <Button type="button" size="sm" variant="ghost" className="h-7" onClick={() => setShipmentModes((prev) => prev.filter((x) => x.id !== row.id))}>Remove</Button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="space-y-2 rounded-md border p-3">
+                    <p className="font-medium text-foreground">Shipment Type</p>
+                    <div className="flex flex-wrap gap-2">
+                      <Input
+                        className="h-8 w-full"
+                        placeholder="Add shipment type"
+                        value={shipmentTypeDraft}
+                        onChange={(e) => setShipmentTypeDraft(e.target.value)}
+                      />
+                      <Button type="button" size="sm" onClick={addShipmentType}>Add</Button>
+                    </div>
+                    {shipmentTypes.length === 0 ? (
+                      <p>No shipment types added yet.</p>
+                    ) : (
+                      <div className="space-y-1">
+                        {shipmentTypes.map((row) => (
+                          <div key={row.id} className="flex items-center justify-between rounded-md border px-2 py-1.5">
+                            <span>{row.name}</span>
+                            <Button type="button" size="sm" variant="ghost" className="h-7" onClick={() => setShipmentTypes((prev) => prev.filter((x) => x.id !== row.id))}>Remove</Button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            {settSection === "payment" ? (
+              <div className="space-y-3 rounded-md border p-3">
+                <p className="font-medium text-foreground">Payment Configuration</p>
+
+                <div className="grid gap-3 md:grid-cols-3">
+                  <div className="space-y-2 rounded-md border p-3">
+                    <p className="font-medium text-foreground">Payment Mode</p>
+                    <div className="flex flex-wrap gap-2">
+                      <Input
+                        className="h-8 w-full"
+                        placeholder="Add payment mode"
+                        value={paymentModeDraft}
+                        onChange={(e) => setPaymentModeDraft(e.target.value)}
+                      />
+                      <Button type="button" size="sm" onClick={addPaymentMode}>Add</Button>
+                    </div>
+                    {paymentModes.length === 0 ? (
+                      <p>No payment modes added yet.</p>
+                    ) : (
+                      <div className="space-y-1">
+                        {paymentModes.map((row) => (
+                          <div key={row.id} className="flex items-center justify-between rounded-md border px-2 py-1.5">
+                            <span>{row.name}</span>
+                            <Button type="button" size="sm" variant="ghost" className="h-7" onClick={() => setPaymentModes((prev) => prev.filter((x) => x.id !== row.id))}>Remove</Button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="space-y-2 rounded-md border p-3">
+                    <p className="font-medium text-foreground">Payment Terms</p>
+                    <div className="grid gap-2 md:grid-cols-[120px,1fr,auto]">
+                      <Input
+                        className="h-8"
+                        placeholder="Advance %"
+                        value={paymentTermDraft.advancePct}
+                        onChange={(e) => setPaymentTermDraft((prev) => ({ ...prev, advancePct: e.target.value }))}
+                      />
+                      <Input
+                        className="h-8"
+                        placeholder="Description"
+                        value={paymentTermDraft.description}
+                        onChange={(e) => setPaymentTermDraft((prev) => ({ ...prev, description: e.target.value }))}
+                      />
+                      <Button type="button" size="sm" onClick={addPaymentTerm}>Add</Button>
+                    </div>
+                    {paymentTerms.length === 0 ? (
+                      <p>No payment terms added yet.</p>
+                    ) : (
+                      <div className="space-y-1">
+                        {paymentTerms.map((row) => (
+                          <div key={row.id} className="flex items-center justify-between gap-2 rounded-md border px-2 py-1.5">
+                            <span>{row.advancePct}% - {row.description}</span>
+                            <Button type="button" size="sm" variant="ghost" className="h-7" onClick={() => setPaymentTerms((prev) => prev.filter((x) => x.id !== row.id))}>Remove</Button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="space-y-2 rounded-md border p-3">
+                    <p className="font-medium text-foreground">Payment Type</p>
+                    <div className="flex flex-wrap gap-2">
+                      <Input
+                        className="h-8 w-full"
+                        placeholder="Add payment type"
+                        value={paymentTypeDraft}
+                        onChange={(e) => setPaymentTypeDraft(e.target.value)}
+                      />
+                      <Button type="button" size="sm" onClick={addPaymentType}>Add</Button>
+                    </div>
+                    {paymentTypes.length === 0 ? (
+                      <p>No payment types added yet.</p>
+                    ) : (
+                      <div className="space-y-1">
+                        {paymentTypes.map((row) => (
+                          <div key={row.id} className="flex items-center justify-between rounded-md border px-2 py-1.5">
+                            <span>{row.name}</span>
+                            <Button type="button" size="sm" variant="ghost" className="h-7" onClick={() => setPaymentTypes((prev) => prev.filter((x) => x.id !== row.id))}>Remove</Button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            {settSection === "users" || settSection === "approval" || settSection === "stock" ? (
+              <div className="rounded-md border border-dashed p-4">
+                <p>
+                  {settSection === "users"
+                    ? "Users settings section is ready."
+                    : settSection === "approval"
+                      ? "Approval settings section is ready."
+                      : "Stock settings section is ready."}
+                </p>
+              </div>
+            ) : null}
           </CardContent>
         </Card>
       )}
